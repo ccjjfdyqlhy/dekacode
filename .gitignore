@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.dekacode/
+.opencode_logs/
+*.codegraph_cache.db
