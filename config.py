@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     default_model: str = "flash"
     log_dir: str = ".opencode_logs"
     max_session_cost: float = 0.0
+    max_tool_iterations: int = 999999
 
     model_config = {
         "env_file": _DEKACODE_DIR / ".env",

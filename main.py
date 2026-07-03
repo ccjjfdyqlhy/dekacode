@@ -31,7 +31,6 @@ from utils import LLMClient
 
 _FILE_REF_RE = re.compile(r"([\w./\\-]+\.py)")
 
-MAX_TOOL_ITERATIONS = 25
 MAX_CONVERSATION_HISTORY = 40
 
 
@@ -333,7 +332,7 @@ async def run_agent_loop(settings: Settings) -> None:
                 model_mode = router.select()
                 current_model_name = client.switch_model(model_mode)
 
-                while turn < MAX_TOOL_ITERATIONS:
+                while turn < settings.max_tool_iterations:
                     _rebuild_graph_if_dirty()
                     tools = registry.get_tool_definitions()
                     request = ctx.build_request()
@@ -470,6 +469,9 @@ async def run_agent_loop(settings: Settings) -> None:
                         break
                 else:
                     _console.print("  [yellow]⚠[/] [dim]Reached max tool iterations[/]")
+                    ctx.rollback_draft()
+                    if turn > 0:
+                        turn -= 1
 
                 turn_records = token_counter.records[turn_start_idx:]
                 summary_in = sum(r.input_tokens for r in turn_records)
