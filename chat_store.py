@@ -55,7 +55,7 @@ class ChatStore:
 
     def create_session(self) -> str:
         now = datetime.now().isoformat()
-        session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_id = datetime.now().strftime("%Y%m%d_%H%M%S%f")
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?)",

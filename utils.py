@@ -79,7 +79,13 @@ class LLMClient:
             )
             if resp.status_code == 401:
                 raise PermissionError("Authentication failed — check your API key")
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                error_body = resp.text
+                raise RuntimeError(
+                    f"HTTP {resp.status_code}: {error_body[:2000]}"
+                ) from e
             return resp.json()
 
 

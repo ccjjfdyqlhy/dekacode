@@ -2,12 +2,13 @@ import asyncio
 import json
 import os
 import re
+import sys
 import time
 
 VERSION = "V0.1"
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.key_binding import KeyBindings
 
 from chat_store import ChatStore
 from config import Settings
@@ -33,6 +34,38 @@ from utils import LLMClient
 _FILE_REF_RE = re.compile(r"([\w./\\-]+\.py)")
 
 MAX_CONVERSATION_HISTORY = 40
+
+
+def _get_tool_detail(name: str, args: dict) -> str:
+    if name == "read_file":
+        path = args.get("filePath", "")
+        offset = args.get("offset")
+        limit = args.get("limit")
+        if offset and limit:
+            return f"{path}:{offset}-{limit}"
+        return path or "?"
+    elif name == "write_file":
+        path = args.get("filePath", "")
+        content = args.get("content", "")
+        lines = content.count("\n")
+        return f"{path}  +{lines} lines"
+    elif name == "glob":
+        return args.get("pattern", "?")
+    elif name == "grep":
+        return f"/{args.get('pattern', '?')}/"
+    elif name == "bash":
+        return ""
+    elif name == "web_fetch":
+        return args.get("url", "?")
+    elif name == "symbol_search":
+        return args.get("query", "?")
+    elif name == "callers":
+        return args.get("symbol", "?")
+    elif name == "read_symbol":
+        return args.get("symbol", "?")
+    elif name == "py_check":
+        return args.get("file_path", "?")
+    return ""
 
 
 def _trim_history(ctx: ContextManager) -> None:
@@ -125,7 +158,6 @@ async def run_agent_loop(settings: Settings) -> None:
 
     from rich.console import Console as _RichConsole
     _console = _RichConsole()
-    _console.set_alt_screen(True)
     _console.clear()
     _console.print(Text.assemble(
         ("  ━ Dekacode ", "bold cyan"),
@@ -178,7 +210,7 @@ async def run_agent_loop(settings: Settings) -> None:
     ))
     _console.print(Text.assemble(
         ("  Commands: ", "dim"),
-        *[pair for cmd in ["cost", "stats", "graph", "sessions", "resume", "load", "flash", "pro", "mode", "help"]
+        *[pair for cmd in ["cost", "stats", "graph", "sessions", "resume", "save", "load", "flash", "pro", "mode", "help"]
         for pair in [(f"/{cmd}", "cyan"), (" ", "dim")]],
     ))
     _console.print("  [dim]Type your message or 'exit' to quit.[/]\n")
@@ -213,19 +245,44 @@ async def run_agent_loop(settings: Settings) -> None:
     _clean_exit = False
     _turn_number = 0
     _last_saved_len = 0
-    _prompt_session = PromptSession(history=InMemoryHistory())
+    _kb = KeyBindings()
+
+    @_kb.add('escape', 'enter')
+    def _insert_newline(event):
+        event.current_buffer.insert_text('\n')
+
+    @_kb.add('enter')
+    def _submit(event):
+        event.current_buffer.validate_and_handle()
+
+    @_kb.add('up')
+    def _move_up(event):
+        buf = event.current_buffer
+        if buf.document.cursor_position_row > 0:
+            buf.cursor_up(1)
+
+    @_kb.add('down')
+    def _move_down(event):
+        buf = event.current_buffer
+        if buf.document.cursor_position_row < buf.document.line_count - 1:
+            buf.cursor_down(1)
+
+    @_kb.add('home')
+    def _scroll_bottom(event):
+        pass
+
+    _prompt_session = PromptSession(multiline=True, key_bindings=_kb, mouse_support=False)
     display = StatusDisplay()
 
     def _save_all(final: bool = False) -> None:
-        nonlocal _last_saved_len
+        nonlocal _last_saved_len, _turn_number
         unsaved = ctx.history[_last_saved_len:]
         if unsaved and (final or not _clean_exit):
             chat_store.save_messages(unsaved)
             _last_saved_len = len(ctx.history)
-        if token_counter.records and not _clean_exit:
+        if token_counter.records and (final or not _clean_exit):
             pending = token_counter.records[turn_start_idx:]
             if pending:
-                _turn_number += 1
                 chat_store.save_usage(
                     turn=_turn_number, model=model_mode,
                     input_tokens=sum(r.input_tokens for r in pending),
@@ -279,7 +336,7 @@ async def run_agent_loop(settings: Settings) -> None:
     try:
         while True:
             try:
-                user_input = (await _prompt_session.prompt_async(" > ")).strip()
+                user_input = (await _prompt_session.prompt_async("\n > ")).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 _clean_exit = True
@@ -339,6 +396,15 @@ async def run_agent_loop(settings: Settings) -> None:
                 else:
                     _load_session(recent[0]["id"])
 
+            elif user_input == "/save":
+                if not chat_store.session_id:
+                    chat_store.create_session()
+                _save_all(final=True)
+                _console.print(Text.assemble(
+                    ("  ✓ Saved  ", "green"),
+                    (chat_store.session_id or "", "cyan"),
+                ))
+
             elif user_input.startswith("/load "):
                 sid = user_input[6:].strip()
                 if not _load_session(sid):
@@ -380,6 +446,7 @@ async def run_agent_loop(settings: Settings) -> None:
                 table.add_row("/graph", "Show project symbol map")
                 table.add_row("/sessions", "List saved chat sessions")
                 table.add_row("/resume", "Load most recent session")
+                table.add_row("/save", "Save current session now")
                 table.add_row("/load id", "Load a past session by ID")
                 table.add_row("/flash", "Switch to flash model (cheap)")
                 table.add_row("/pro", "Switch to pro model (powerful)")
@@ -394,6 +461,7 @@ async def run_agent_loop(settings: Settings) -> None:
                 if not chat_store.session_id:
                     chat_store.create_session()
                 _trim_history(ctx)
+                _last_saved_len = min(_last_saved_len, len(ctx.history))
                 ctx.add_user_message(user_input)
                 _attach_imports(ctx, user_input)
 
@@ -403,6 +471,7 @@ async def run_agent_loop(settings: Settings) -> None:
                 model_mode = router.select()
                 current_model_name = client.switch_model(model_mode)
 
+                await display.begin()
                 while turn < settings.max_tool_iterations:
                     _rebuild_graph_if_dirty()
                     tools = registry.get_tool_definitions()
@@ -411,23 +480,23 @@ async def run_agent_loop(settings: Settings) -> None:
                         await display.status("Thinking")
                         response = await client.chat(request, tools, model_mode=model_mode)
                     except Exception as e:
-                        await display.done()
+                        await display.end()
                         _console.print(f"  [red]✗ API Error:[/] {e}")
                         ctx.rollback_draft()
                         break
 
                     choices = response.get("choices")
                     if not choices:
-                        await display.done()
+                        await display.end()
                         _console.print("  [red]✗ API Error: empty response[/]")
                         ctx.rollback_draft()
                         break
 
-                    await display.done()
                     rec = token_counter.record(response, model=model_mode)
-                    _console.print(token_counter.display(rec))
+                    display.token(token_counter.display(rec))
 
                     if settings.max_session_cost > 0 and token_counter.session_cost > settings.max_session_cost:
+                        await display.end()
                         _console.print(f"  [red]Budget exceeded:[/] ¥{token_counter.session_cost:.4f} > ¥{settings.max_session_cost:.4f}")
                         logger.save()
                         _clean_exit = True
@@ -454,7 +523,7 @@ async def run_agent_loop(settings: Settings) -> None:
                                 )
                             )
                         assistant.tool_calls = parsed
-                        ctx.add_assistant_message(assistant)
+                        ctx.draft.append(assistant)
                         if content:
                             _console.print(Markdown(content))
 
@@ -477,13 +546,17 @@ async def run_agent_loop(settings: Settings) -> None:
                                         "read_symbol": "Reading",
                                         "py_check": "Checking",
                                     }.get(tc.function.name, "Working")
-                                    await display.status(tool_label)
+                                    detail = _get_tool_detail(tc.function.name, args)
+                                    if tc.function.name == "bash":
+                                        cmd = args.get("command", "")
+                                        if cmd.lstrip().startswith("grep"):
+                                            tool_label = "Grepping"
+                                    await display.status(tool_label, detail)
                                     result = await registry.execute(tc.function.name, args)
                                     result_text = result.output if result.success else f"[Error] {result.output}"
                             except Exception as e:
                                 result_text = f"[Error] Tool crashed: {type(e).__name__}: {e}"
 
-                            await display.done()
                             if tc.function.name == "bash":
                                 result_text = OutputFilter.bash(result_text)
                             elif tc.function.name == "grep":
@@ -497,7 +570,6 @@ async def run_agent_loop(settings: Settings) -> None:
                             if undefined:
                                 await display.status("Prefetching")
                                 prefetched = prefetcher.prefetch(undefined[:5])
-                                await display.done()
                                 if prefetched:
                                     ctx.add_tool_result(
                                         f"{tc.id}_prefetch",
@@ -517,7 +589,6 @@ async def run_agent_loop(settings: Settings) -> None:
                                         assistant.content = cleaned
                                     await display.status("Resolving")
                                     fetched = resolver.fetch(symbols)
-                                    await display.done()
                                     if fetched:
                                         _console.print(Text.assemble(("  ⌘ Resolved ", "cyan"), (f"{len(symbols)} placeholders", "dim")))
                                         ctx.add_assistant_message(assistant)
@@ -530,22 +601,39 @@ async def run_agent_loop(settings: Settings) -> None:
 
                         ctx.add_assistant_message(assistant)
                         if content:
-                                _console.print(Markdown(content))
-                                if token_counter.records:
-                                    last = token_counter.records[-1]
-                                    ctx_pct = last.input_tokens / 1_000_000 * 100
-                                    cache_pct = last.cache_hit_input / last.input_tokens * 100 if last.input_tokens > 0 else 0
-                                    out_pct = last.output_tokens / 128_000 * 100
-                                    _console.print(Text.assemble(
-                                        ("  Context ", "dim"),
-                                        (f"{ctx_pct:.1f}%", "cyan"),
-                                        ("  Cache ", "dim"),
-                                        (f"{cache_pct:.0f}%", "green"),
-                                        ("  Output ", "dim"),
-                                        (f"{out_pct:.1f}%", "yellow"),
-                                    ))
+                            await display.end()
+                            _console.print(Markdown(content))
+                            turn_total_in = sum(r.input_tokens for r in token_counter.records[turn_start_idx:])
+                            turn_total_out = sum(r.output_tokens for r in token_counter.records[turn_start_idx:])
+                            turn_total_cost = sum(r.cost for r in token_counter.records[turn_start_idx:])
+                            _console.print(Text.assemble(
+                                ("  ∑ ", "yellow"),
+                                (f"{turn_total_in} ", ""),
+                                ("in  ", "dim"),
+                                ("↓ ", "cyan"),
+                                (f"{turn_total_out} ", ""),
+                                ("out  ", "dim"),
+                                ("│ ", "dim"),
+                                (f"¥{turn_total_cost:.4f}", "bold yellow"),
+                            ))
+                            if token_counter.records:
+                                last = token_counter.records[-1]
+                                ctx_pct = last.input_tokens / 1_000_000 * 100
+                                cache_pct = last.cache_hit_input / last.input_tokens * 100 if last.input_tokens > 0 else 0
+                                out_pct = last.output_tokens / 128_000 * 100
+                                _console.print(Text.assemble(
+                                    ("  Context ", "dim"),
+                                    (f"{ctx_pct:.1f}%", "cyan"),
+                                    ("  Cache ", "dim"),
+                                    (f"{cache_pct:.0f}%", "green"),
+                                    ("  Output ", "dim"),
+                                    (f"{out_pct:.1f}%", "yellow"),
+                                ))
+                        else:
+                            await display.end()
                         break
                 else:
+                    await display.end()
                     _console.print("  [yellow]⚠[/] Reached max tool iterations")
                     ctx.rollback_draft()
                     if turn > 0:
@@ -557,6 +645,12 @@ async def run_agent_loop(settings: Settings) -> None:
                 summary_cache = sum(r.cache_hit_input for r in turn_records)
                 summary_cost = sum(r.cost for r in turn_records)
                 _turn_number += 1
+
+                unsaved = ctx.history[_last_saved_len:]
+                if unsaved:
+                    chat_store.save_messages(unsaved)
+                    _last_saved_len = len(ctx.history)
+
                 chat_store.save_usage(
                     turn=_turn_number,
                     model=model_mode,
@@ -565,6 +659,7 @@ async def run_agent_loop(settings: Settings) -> None:
                     cache_hit_input=summary_cache,
                     cost=summary_cost,
                 )
+                turn_start_idx = len(token_counter.records)
                 logger.log_turn({
                     "user_message": user_input[:200],
                     "turns": turn + 1,
@@ -578,15 +673,11 @@ async def run_agent_loop(settings: Settings) -> None:
     except BaseException:
         raise
     finally:
-        try:
-            _console.set_alt_screen(False)
-        except Exception:
-            pass
         _save_all(final=True)
         if not _clean_exit:
             _console.print(Text.assemble(
                 ("  ⚠ Crash  Chat saved (session: ", "red"),
-                (chat_store.session_id, "cyan"),
+                (chat_store.session_id or "none", "cyan"),
                 (")", "red"),
             ))
 

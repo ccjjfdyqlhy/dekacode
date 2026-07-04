@@ -2,65 +2,88 @@ import asyncio
 import time
 
 from rich.console import Console
-from rich.live import Live
-from rich.text import Text
 
 
 class StatusDisplay:
     def __init__(self):
-        self._task: asyncio.Task | None = None
+        self._ticker_task: asyncio.Task | None = None
         self._label = ""
+        self._detail = ""
+        self._token_str = ""
         self._start = 0.0
         self._console = Console()
-        self._live: Live | None = None
 
-    def _make_renderable(self, frozen: bool = False) -> Text:
-        elapsed = time.time() - self._start
-        if frozen:
-            spinner = "▸"
-        else:
+    def _render_str(self) -> str:
+        parts = ["  "]
+        if self._label:
             chars = "▸▹►"
-            idx = int(elapsed * 5) % len(chars)
-            spinner = chars[idx]
-        text = Text()
-        text.append("  ", style="")
-        text.append(spinner, style="bold cyan")
-        text.append(" ")
-        text.append(self._label, style="bold")
-        text.append("  ", style="")
-        text.append(f"({elapsed:.1f}s)", style="dim")
-        return text
+            idx = int((time.time() - self._start) * 5) % 3
+            parts.append(f"[bold cyan]{chars[idx]}[/] ")
+            parts.append(f"[bold]{self._label}[/]")
+            if self._detail:
+                parts.append(f"  [dim]{self._detail}[/]")
+            parts.append(f"  [dim]({time.time()-self._start:.1f}s)[/]")
+        if self._token_str:
+            if self._label:
+                parts.append("  [dim]│[/]  ")
+            parts.append(self._token_str)
+        return "".join(parts)
 
-    async def _ticker(self) -> None:
-        self._start = time.time()
-        self._live = Live(
-            self._make_renderable(),
-            console=self._console,
-            refresh_per_second=10,
-            transient=False,
-        )
-        self._live.start()
-        try:
-            while True:
-                self._live.update(self._make_renderable())
-                await asyncio.sleep(0.2)
-        except asyncio.CancelledError:
-            self._live.update(self._make_renderable(frozen=True))
-            self._live.refresh()
-        finally:
-            self._live.stop()
+    def _freeze_str(self) -> str:
+        elapsed = time.time() - self._start
+        parts = ["  "]
+        if self._label:
+            parts.append("[bold cyan]▸[/] ")
+            parts.append(f"[bold]{self._label}[/]")
+            if self._detail:
+                parts.append(f"  [dim]{self._detail}[/]")
+            parts.append(f"  [dim]({elapsed:.1f}s)[/]")
+        if self._token_str:
+            if self._label:
+                parts.append("  [dim]│[/]  ")
+            parts.append(self._token_str)
+        return "".join(parts)
 
-    async def status(self, label: str) -> None:
-        await self.done()
+    def _draw(self) -> None:
+        self._console.print(self._render_str(), end="\r")
+
+    def _freeze_and_newline(self) -> None:
+        self._console.print(self._freeze_str())
+
+    async def begin(self) -> None:
+        await self.end()
+
+    async def end(self) -> None:
+        await self._stop_ticker()
+        self._label = ""
+        self._detail = ""
+        self._token_str = ""
+
+    async def status(self, label: str, detail: str = "") -> None:
+        await self._stop_ticker()
         self._label = label
-        self._task = asyncio.create_task(self._ticker())
+        self._detail = detail
+        self._start = time.time()
+        self._draw()
+        self._ticker_task = asyncio.create_task(self._ticker())
 
-    async def done(self) -> None:
-        if self._task:
-            self._task.cancel()
+    def token(self, text: str) -> None:
+        self._token_str = text
+        self._draw()
+
+    async def _stop_ticker(self) -> None:
+        if self._ticker_task:
+            self._ticker_task.cancel()
             try:
-                await self._task
+                await self._ticker_task
             except asyncio.CancelledError:
                 pass
-            self._task = None
-            self._live = None
+            self._ticker_task = None
+
+    async def _ticker(self) -> None:
+        try:
+            while True:
+                self._draw()
+                await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            self._freeze_and_newline()
