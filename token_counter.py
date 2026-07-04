@@ -78,13 +78,13 @@ class TokenCounter:
         return rec
 
     def display(self, rec: UsageRecord) -> str:
-        peak_tag = " ⚡peak" if rec.peak_hours else ""
+        peak_tag = " [red]⚡[/]" if rec.peak_hours else ""
         hit_pct = (rec.cache_hit_input / rec.input_tokens * 100) if rec.input_tokens > 0 else 0
         return (
-            f"[Tokens] ↑{rec.input_tokens} in "
-            f"(cache:{rec.cache_hit_input}/{hit_pct:.0f}%) "
-            f"| ↓{rec.output_tokens} out "
-            f"| ¥{rec.cost:.4f}{peak_tag}"
+            f"  [yellow]↑[/] {rec.input_tokens} [dim]in[/] "
+            f"[dim](cache [/]{rec.cache_hit_input}/{hit_pct:.0f}%[dim])[/] "
+            f"[cyan]↓[/] {rec.output_tokens} [dim]out[/] "
+            f"[dim]│[/] [bold yellow]¥{rec.cost:.4f}[/]{peak_tag}"
         )
 
     def session_summary(self) -> str:
@@ -92,7 +92,8 @@ class TokenCounter:
         total_out = sum(r.output_tokens for r in self.records)
         total_cache = sum(r.cache_hit_input for r in self.records)
         return (
-            f"[Session] ↑{total_in} in | ↓{total_out} out "
-            f"| cache:{total_cache}/{total_in-total_cache} "
-            f"| ¥{self.session_cost:.4f}"
+            f"  [yellow]∑[/] {total_in} [dim]in[/] "
+            f"[cyan]↓[/] {total_out} [dim]out[/] "
+            f"[dim]cache [/]{total_cache}/{total_in-total_cache} "
+            f"[dim]│[/] [bold yellow]¥{self.session_cost:.4f}[/]"
         )

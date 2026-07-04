@@ -22,6 +22,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.syntax import Syntax
 from rich.table import Table
+from rich.text import Text
 from rich import box
 
 from code_graph.placeholders import PlaceholderResolver
@@ -98,14 +99,23 @@ def _build_graph(project_root: str):
     if cache.is_fresh():
         graph = cache.load()
         if graph:
-            _rc.print(f"  [dim]Call graph:[/] [green]{graph.total_symbols()}[/] [dim]symbols,[/] [green]{len(graph.files)}[/] [dim]files (cached)[/]")
+            _rc.print(Text.assemble(
+                ("  Call graph:", "dim"),
+                (f" {graph.total_symbols()} symbols, ", "green"),
+                (f"{len(graph.files)} files", "green"),
+                (" (cached)", "dim"),
+            ))
             return graph
-    _rc.print(f"  [yellow]⟳[/] [dim]Building call graph (full scan)...[/]")
+    _rc.print("  [yellow]⟳[/] Building call graph (full scan)...")
     t0 = time.time()
     builder = GraphBuilder(project_root)
     graph = builder.build()
     cache.save(graph)
-    _rc.print(f"  [green]✓[/] [dim]{graph.total_symbols()} symbols, {len(graph.files)} files in[/] {time.time()-t0:.1f}s")
+    _rc.print(Text.assemble(
+        ("  ✓ ", "green"),
+        (f"{graph.total_symbols()} symbols, {len(graph.files)} files", "green"),
+        (f" in {time.time()-t0:.1f}s", "dim"),
+    ))
     return graph
 
 
@@ -115,7 +125,15 @@ async def run_agent_loop(settings: Settings) -> None:
 
     from rich.console import Console as _RichConsole
     _console = _RichConsole()
-    _console.print(f"━ [bold cyan]Dekacode[/] [yellow]{VERSION}[/] [dim]@[/] [green]{project_root}[/] [bold cyan]activated[/]", style="bold")
+    _console.set_alt_screen(True)
+    _console.clear()
+    _console.print(Text.assemble(
+        ("  ━ Dekacode ", "bold cyan"),
+        (VERSION, "yellow"),
+        (" @ ", "dim"),
+        (project_root, "green"),
+        (" activated", "bold cyan"),
+    ))
 
     graph = _build_graph(project_root)
     registry = _setup_registry(graph)
@@ -124,9 +142,12 @@ async def run_agent_loop(settings: Settings) -> None:
     prompt_engine.load_all()
     tool_lines = prompt_engine.build_tool_descriptions(registry)
     system_prompt = prompt_engine.build_system_prompt(tool_lines)
-    _console.print(f"  [dim]Prompts:[/] [green]{len(prompt_engine.get_enabled())}[/] [dim]enabled[/]")
+    _console.print(Text.assemble(
+        ("  Prompts: ", "dim"),
+        (f"{len(prompt_engine.get_enabled())} enabled", "green"),
+    ))
     for line in prompt_engine.summary().split("\n"):
-        _console.print(f"  {line}")
+        _console.print(Text(f"  {line}", style="dim"))
 
     ctx = ContextManager(system_prompt)
     token_counter = TokenCounter()
@@ -146,9 +167,20 @@ async def run_agent_loop(settings: Settings) -> None:
 
     turn_start_idx = 0
 
-    _console.print(f"  [bold green]Code Agent ready[/]  [dim]provider=[/][yellow]{settings.provider}[/] [dim]model=[/][cyan]{current_model_name}[/]")
-    _console.print(f"  [dim]mode=[/][magenta]{model_mode}[/]  [dim]peak=[/]{'[red]⚠[/]' if in_peak_hours() else '[green]✓[/]'}")
-    _console.print("  [dim]Commands:[/] [cyan]/cost[/] [cyan]/stats[/] [cyan]/graph[/] [cyan]/sessions[/] [cyan]/resume[/] [cyan]/load[/] [cyan]/flash[/] [cyan]/pro[/] [cyan]/mode[/] [cyan]/help[/]")
+    _console.print(Text.assemble(
+        ("  Code Agent ready", "bold green"),
+        ("  provider=", "dim"), (settings.provider, "yellow"),
+        ("  model=", "dim"), (current_model_name, "cyan"),
+    ))
+    _console.print(Text.assemble(
+        ("  mode=", "dim"), (model_mode, "magenta"),
+        ("  peak=", "dim"), ("⚠", "red") if in_peak_hours() else ("✓", "green"),
+    ))
+    _console.print(Text.assemble(
+        ("  Commands: ", "dim"),
+        *[pair for cmd in ["cost", "stats", "graph", "sessions", "resume", "load", "flash", "pro", "mode", "help"]
+        for pair in [(f"/{cmd}", "cyan"), (" ", "dim")]],
+    ))
     _console.print("  [dim]Type your message or 'exit' to quit.[/]\n")
 
     from code_graph.watcher import FileWatcher
@@ -167,12 +199,16 @@ async def run_agent_loop(settings: Settings) -> None:
         for fpath in changed:
             graph_cache.mark_dirty(fpath)
         if changed:
-            _console.print(f"  [yellow]⟳[/] [dim]{len(changed)} file(s) modified, rebuilding call graph...[/]")
+            _console.print(f"  [yellow]⟳[/] {len(changed)} file(s) modified, rebuilding call graph...")
             t0 = time.time()
             builder = GraphBuilder(project_root)
             graph = builder.build()
             graph_cache.save(graph)
-            _console.print(f"  [green]✓[/] [dim]Rebuilt in[/] {time.time()-t0:.1f}s [dim]({graph.total_symbols()} symbols)[/]")
+            _console.print(Text.assemble(
+                ("  ✓ Rebuilt in ", "green"),
+                (f"{time.time()-t0:.1f}s", "dim"),
+                (f"  ({graph.total_symbols()} symbols)", "green"),
+            ))
 
     _clean_exit = False
     _turn_number = 0
@@ -198,7 +234,7 @@ async def run_agent_loop(settings: Settings) -> None:
                     cost=sum(r.cost for r in pending),
                 )
         if token_counter.records:
-            _console.print(f"  [yellow]{token_counter.session_summary()}[/]")
+            _console.print(token_counter.session_summary())
         logger.save()
 
     _tool_status_map = {
@@ -212,7 +248,7 @@ async def run_agent_loop(settings: Settings) -> None:
     def _render_hist(hist: list) -> None:
         for m in hist:
             if m.role == "user" and m.content:
-                _console.print(f"\n > {m.content}")
+                _console.print(f"\n  > {m.content}")
             elif m.role == "assistant" and m.content:
                 _console.print(Markdown(m.content))
             elif m.role == "tool":
@@ -230,7 +266,13 @@ async def run_agent_loop(settings: Settings) -> None:
         usage = chat_store.load_usage(sid)
         total_cost = sum(u["cost"] for u in usage)
         total_in = sum(u["input_tokens"] for u in usage)
-        _console.print(f"  [green]Loaded[/] [cyan]{sid}[/]: [yellow]{len(hist)}[/] [dim]msgs,[/] [yellow]¥{total_cost:.4f}[/], [cyan]{int(total_in/1000)}K[/] [dim]in[/]")
+        _console.print(Text.assemble(
+            ("  Loaded ", "green"),
+            (sid, "cyan"),
+            (f"  {len(hist)} msgs", "yellow"),
+            (f"  ¥{total_cost:.4f}", "bold yellow"),
+            (f"  {int(total_in/1000)}K in", "cyan"),
+        ))
         _render_hist(hist)
         return True
 
@@ -252,16 +294,20 @@ async def run_agent_loop(settings: Settings) -> None:
 
             if user_input == "/cost":
                 if token_counter.records:
-                    _console.print(f"  [yellow]{token_counter.session_summary()}[/]")
+                    _console.print(token_counter.session_summary())
                 else:
                     _console.print("  [dim]No API calls yet.[/]")
 
             elif user_input == "/stats":
                 total = ctx.total_messages()
-                _console.print(f"  [bold]Context:[/] [cyan]prefix={len(ctx.prefix)}[/] [cyan]history={len(ctx.history)}[/] [cyan]draft={len(ctx.draft)}[/] [dim]total={total}[/]")
-                _console.print(f"  [bold]API calls:[/] [yellow]{len(token_counter.records)}[/]")
-                _console.print(f"  [bold]Graph:[/] [green]{graph.total_symbols()}[/] [dim]symbols,[/] [green]{len(graph.files)}[/] [dim]files[/]")
-                _console.print(f"  [bold]Model:[/] [magenta]{model_mode}[/] [dim]({current_model_name})[/]")
+                table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+                table.add_column("Key", style="bold", no_wrap=True)
+                table.add_column("Value")
+                table.add_row("Context", f"[cyan]prefix={len(ctx.prefix)}[/] [cyan]history={len(ctx.history)}[/] [cyan]draft={len(ctx.draft)}[/] [dim]total={total}[/]")
+                table.add_row("API calls", f"[yellow]{len(token_counter.records)}[/]")
+                table.add_row("Graph", f"[green]{graph.total_symbols()}[/] [dim]symbols,[/] [green]{len(graph.files)}[/] [dim]files[/]")
+                table.add_row("Model", f"[magenta]{model_mode}[/] [dim]({current_model_name})[/]")
+                _console.print(table)
 
             elif user_input == "/graph":
                 _console.print(Syntax(graph.to_compact_map()[:3000], "python", word_wrap=True))
@@ -271,12 +317,20 @@ async def run_agent_loop(settings: Settings) -> None:
                 if not all_sessions:
                     _console.print("  [dim]No saved sessions[/]")
                 else:
+                    table = Table(box=box.SIMPLE, header_style="bold cyan")
+                    table.add_column("", style="green")
+                    table.add_column("ID", style="cyan", no_wrap=True)
+                    table.add_column("Msgs", justify="right")
+                    table.add_column("Cost", style="yellow")
+                    table.add_column("Tokens", style="cyan")
+                    table.add_column("Summary", style="dim")
                     for s in all_sessions:
-                        cur = "[green]←[/]" if s["id"] == chat_store.session_id else " "
-                        summary = s["summary"][:60] if s["summary"] else "[dim](no summary)[/]"
-                        cost_str = f" [yellow]¥{s['total_cost']:.4f}[/]" if s['total_cost'] > 0 else ""
-                        tokens_str = f" [cyan]{int(s['total_input']/1000)}K in[/]" if s['total_input'] > 0 else ""
-                        _console.print(f"  {cur} [cyan]{s['id']}[/] [dim]({s['message_count']} msgs)[/]{cost_str}{tokens_str}  {summary}")
+                        cur = "←" if s["id"] == chat_store.session_id else ""
+                        summary = s["summary"][:60] if s["summary"] else "(no summary)"
+                        cost = f"¥{s['total_cost']:.4f}" if s['total_cost'] > 0 else ""
+                        tokens = f"{int(s['total_input']/1000)}K" if s['total_input'] > 0 else ""
+                        table.add_row(cur, s["id"], str(s["message_count"]), cost, tokens, summary)
+                    _console.print(table)
 
             elif user_input == "/resume":
                 recent = chat_store.list_sessions(limit=1)
@@ -293,31 +347,48 @@ async def run_agent_loop(settings: Settings) -> None:
             elif user_input == "/flash":
                 model_mode = router.switch("flash")
                 current_model_name = client.switch_model("flash")
-                _console.print(f"  [cyan]Switched to flash:[/] [bold]{current_model_name}[/]")
+                _console.print(Text.assemble(
+                    ("  Flash ", "cyan"), ("▸ ", "dim"), (current_model_name, "bold"),
+                ))
 
             elif user_input == "/pro":
                 model_mode = router.switch("pro")
                 current_model_name = client.switch_model("pro")
-                _console.print(f"  [magenta]Switched to pro:[/] [bold]{current_model_name}[/]")
+                _console.print(Text.assemble(
+                    ("  Pro ", "magenta"), ("▸ ", "dim"), (current_model_name, "bold"),
+                ))
 
             elif user_input == "/mode":
                 model_mode = router.switch("auto")
                 peak = in_peak_hours()
                 model_mode = "flash"
                 current_model_name = client.switch_model("flash")
-                _console.print(f"  [green]Auto mode:[/] [magenta]{model_mode}[/] [dim]({current_model_name})[/] peak={'[red]⚠[/]' if peak else '[green]✓[/]'}")
+                _console.print(Text.assemble(
+                    ("  Auto ", "green"),
+                    ("▸ ", "dim"),
+                    (current_model_name, "bold"),
+                    ("  ", ""),
+                    ("peak", "red") if peak else ("ok", "green"),
+                ))
 
             elif user_input == "/help":
-                _console.print("  [cyan]/cost[/]     [dim]Show session token cost[/]")
-                _console.print("  [cyan]/stats[/]    [dim]Show context stats[/]")
-                _console.print("  [cyan]/graph[/]    [dim]Show project symbol map[/]")
-                _console.print("  [cyan]/sessions[/] [dim]List saved chat sessions[/]")
-                _console.print("  [cyan]/resume[/]   [dim]Load most recent session[/]")
-                _console.print("  [cyan]/load id[/]  [dim]Load a past session by ID[/]")
-                _console.print("  [cyan]/flash[/]    [dim]Switch to flash model (cheap)[/]")
-                _console.print("  [cyan]/pro[/]      [dim]Switch to pro model (powerful)[/]")
-                _console.print("  [cyan]/mode[/]     [dim]Auto model selection[/]")
-                _console.print("  [cyan]/exit[/]     [dim]Exit[/]")
+                table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+                table.add_column("Command", style="cyan", no_wrap=True)
+                table.add_column("Description", style="dim")
+                table.add_row("/cost", "Show session token cost")
+                table.add_row("/stats", "Show context stats")
+                table.add_row("/graph", "Show project symbol map")
+                table.add_row("/sessions", "List saved chat sessions")
+                table.add_row("/resume", "Load most recent session")
+                table.add_row("/load id", "Load a past session by ID")
+                table.add_row("/flash", "Switch to flash model (cheap)")
+                table.add_row("/pro", "Switch to pro model (powerful)")
+                table.add_row("/mode", "Auto model selection")
+                table.add_row("/exit", "Exit")
+                _console.print(table)
+
+            elif user_input.startswith("/"):
+                _console.print(f"  [yellow]Unknown command:[/] {user_input}")
 
             else:
                 if not chat_store.session_id:
@@ -341,23 +412,23 @@ async def run_agent_loop(settings: Settings) -> None:
                         response = await client.chat(request, tools, model_mode=model_mode)
                     except Exception as e:
                         await display.done()
-                        _console.print(f"\n  [red]✗ API Error:[/] {e}")
+                        _console.print(f"  [red]✗ API Error:[/] {e}")
                         ctx.rollback_draft()
                         break
 
                     choices = response.get("choices")
                     if not choices:
                         await display.done()
-                        _console.print("\n  [red]✗ API Error: empty response[/]")
+                        _console.print("  [red]✗ API Error: empty response[/]")
                         ctx.rollback_draft()
                         break
 
                     await display.done()
                     rec = token_counter.record(response, model=model_mode)
-                    _console.print(f"  {token_counter.display(rec)}")
+                    _console.print(token_counter.display(rec))
 
                     if settings.max_session_cost > 0 and token_counter.session_cost > settings.max_session_cost:
-                        _console.print(f"\n[red]Budget exceeded:[/] ¥{token_counter.session_cost:.4f} > ¥{settings.max_session_cost:.4f}")
+                        _console.print(f"  [red]Budget exceeded:[/] ¥{token_counter.session_cost:.4f} > ¥{settings.max_session_cost:.4f}")
                         logger.save()
                         _clean_exit = True
                         return
@@ -448,7 +519,7 @@ async def run_agent_loop(settings: Settings) -> None:
                                     fetched = resolver.fetch(symbols)
                                     await display.done()
                                     if fetched:
-                                        _console.print(f"  [cyan]⌘[/] [dim]Resolved {len(symbols)} placeholders[/]")
+                                        _console.print(Text.assemble(("  ⌘ Resolved ", "cyan"), (f"{len(symbols)} placeholders", "dim")))
                                         ctx.add_assistant_message(assistant)
                                         ctx.add_tool_result(
                                             "_placeholder",
@@ -465,10 +536,17 @@ async def run_agent_loop(settings: Settings) -> None:
                                     ctx_pct = last.input_tokens / 1_000_000 * 100
                                     cache_pct = last.cache_hit_input / last.input_tokens * 100 if last.input_tokens > 0 else 0
                                     out_pct = last.output_tokens / 128_000 * 100
-                                    _console.print(f"  [dim]Context[/] [cyan]{ctx_pct:.1f}%[/]  [dim]Cache[/] [green]{cache_pct:.0f}%[/]  [dim]Output[/] [yellow]{out_pct:.1f}%[/]")
+                                    _console.print(Text.assemble(
+                                        ("  Context ", "dim"),
+                                        (f"{ctx_pct:.1f}%", "cyan"),
+                                        ("  Cache ", "dim"),
+                                        (f"{cache_pct:.0f}%", "green"),
+                                        ("  Output ", "dim"),
+                                        (f"{out_pct:.1f}%", "yellow"),
+                                    ))
                         break
                 else:
-                    _console.print("  [yellow]⚠[/] [dim]Reached max tool iterations[/]")
+                    _console.print("  [yellow]⚠[/] Reached max tool iterations")
                     ctx.rollback_draft()
                     if turn > 0:
                         turn -= 1
@@ -500,9 +578,17 @@ async def run_agent_loop(settings: Settings) -> None:
     except BaseException:
         raise
     finally:
+        try:
+            _console.set_alt_screen(False)
+        except Exception:
+            pass
         _save_all(final=True)
         if not _clean_exit:
-            _console.print(f"  [red]⚠ Crash[/] [dim]Chat saved (session:[/] [cyan]{chat_store.session_id}[/][dim])[/]")
+            _console.print(Text.assemble(
+                ("  ⚠ Crash  Chat saved (session: ", "red"),
+                (chat_store.session_id, "cyan"),
+                (")", "red"),
+            ))
 
 
 def main() -> None:
