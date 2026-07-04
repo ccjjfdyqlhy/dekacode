@@ -1,26 +1,29 @@
 # Dekacode
 
-**Token-efficient AI Coding Agent for the terminal.**
+**Token-efficient AI coding agent for your terminal.**
 
-Dekacode is an interactive AI assistant specialized in software engineering. It runs in your terminal, understands natural language, and autonomously performs file system and shell operations through LLM tool-calling. Every design decision prioritizes **token efficiency** — minimized context, aggressive caching, and smart model routing keep costs low.
+Dekacode runs in your terminal as an AI software engineering assistant. It understands natural language instructions and autonomously performs file operations, shell commands, code analysis, and symbol navigation — all through LLM tool-calling. Every architectural decision targets **token efficiency**: minimal context, aggressive caching, speculative pre-fetching, and smart model routing.
 
 ---
 
 ## Features
 
-- **Tool-calling agent** — read/write files, execute bash, glob, grep, fetch URLs, search symbols, check Python syntax
-- **Call graph** — AST-based project-wide symbol index with caller/callee chain traversal (up to 143 symbols indexed in ~0.01s)
+- **Tool-calling agent** — read/write files, execute bash, glob, grep, fetch URLs, search symbols, check Python syntax, diff files, and more
+- **AST call graph** — full-project symbol index with caller/callee chain traversal; 140+ symbols indexed in ~0.01s
 - **Token-first architecture**
   - Append-only context loop + fixed prefix → maximizes DeepSeek V4 prefix cache hits (cost as low as ¥0.025/1M tokens)
-  - Speculative pre-fetch: auto-resolves undefined symbols from error output
-  - `[FETCH:Class:Name]` placeholder protocol — model requests definitions on demand
-  - RTK output filters: strips ANSI, timestamps, UUIDs from bash/grep output
-- **Dual model routing** — Flash (cheap) for simple tasks, Pro (powerful) for complex ones; auto-downgrades during peak hours
-- **Rich terminal UI** — Markdown rendering, syntax highlighting, real-time status spinner with per-operation timing
-- **Session persistence** — SQLite-backed conversation history with `/resume` to restore
-- **Prompt fragments** — Modular system prompt with YAML front matter (`enabled: true/false`, `order:`)
-- **File watcher** — Detects source changes and incrementally rebuilds the call graph
-- **Cost observability** — Per-call token/cache/cost tracking with budget limits
+  - Speculative pre-fetch: extracts undefined symbols from error output and auto-injects source code
+  - `[FETCH:Class:Name]` placeholder protocol — model requests symbol definitions on demand
+  - RTK output filters: strips ANSI codes, timestamps, UUIDs from bash/grep output (reduces tool output 60–90%)
+- **Dual-model routing** — Flash (cheap) for simple tasks, Pro (powerful) for complex ones; auto-downgrade during peak hours
+- **Rich terminal UI** — Markdown rendering, syntax highlighting, live status spinner with per-operation timing and progress bar
+- **Session persistence** — SQLite-backed conversation history with `/resume` to restore previous sessions
+- **Modular prompts** — YAML front-matter fragments (`enabled: true/false`, `order:`) for flexible system prompt composition
+- **File watcher** — detects source changes and incrementally rebuilds the call graph
+- **Cost observability** — per-call token/cache/cost tracking with session budget limits
+- **Duration predictor** — OLS-based request latency prediction for smarter progress display
+- **Cache warmer** — keepalive requests during idle to prevent server-side prefix cache eviction
+- **Provider-agnostic** — works with any OpenAI-compatible API: DeepSeek, OpenAI, ZhiPu, LM Studio (local), etc.
 
 ---
 
@@ -29,27 +32,25 @@ Dekacode is an interactive AI assistant specialized in software engineering. It 
 ### Requirements
 
 - Python 3.12+
-- An OpenAI-compatible API endpoint (DeepSeek, OpenAI, ZhiPu, local LM Studio, etc.)
+- An OpenAI-compatible API endpoint
 
 ### Install
 
 ```bash
-git clone <repo> && cd dekacode
+git clone https://github.com/your-org/dekacode.git && cd dekacode
 pip install -r requirements.txt
 cp .env.example .env   # edit with your API keys
 ```
 
 ### Configure
 
-Edit `.env`:
-
 ```ini
 PROVIDER=openai
 OPENAI_API_KEY=sk-xxx
 OPENAI_BASE_URL=https://api.deepseek.com
 
-FLASH_MODEL=deepseek-v4-flash
-PRO_MODEL=deepseek-v4-pro
+FLASH_MODEL=deepseek-chat
+PRO_MODEL=deepseek-reasoner
 ```
 
 ### Run
@@ -67,12 +68,16 @@ python /path/to/dekacode/main.py
 
 | Command | Description |
 |---------|-------------|
-| `/cost` | Show session token cost |
-| `/stats` | Show context / graph / model stats |
+| `/cost` | Show session token & cost summary |
+| `/stats` | Show context / call graph / model stats |
+| `/prompts` | List enabled/disabled prompt fragments |
 | `/graph` | Show project symbol map |
 | `/sessions` | List saved chat sessions |
 | `/resume` | Load the most recent session |
-| `/load <id>` | Load a specific session |
+| `/save` | Save current session immediately |
+| `/load <id>` | Load a specific session by ID |
+| `/retry` | Retry the last input |
+| `/undo` | Undo the last turn |
 | `/flash` | Switch to flash model (cheap) |
 | `/pro` | Switch to pro model (powerful) |
 | `/mode` | Auto model selection |
@@ -82,10 +87,10 @@ python /path/to/dekacode/main.py
 ### Examples
 
 ```
- > 看一下这个项目
- > 检查 main.py 的语法错误
- > 帮我找到 handle_request 的所有调用方
- > 给 UserService 添加日志
+ > Show me the architecture of this project
+ > Check main.py for syntax errors
+ > Find all callers of handle_request
+ > Add logging to UserService
 ```
 
 ---
@@ -93,20 +98,75 @@ python /path/to/dekacode/main.py
 ## Architecture
 
 ```
-main.py                  Entry point, main loop
-├── prompt_engine.py     Builds system prompt from prompts/*.md
-├── context.py           Three-zone context (prefix / history / draft)
-├── skill.py             Skill base class & registry
-├── router.py            Flash/Pro model routing
-├── token_counter.py     Token cost tracking
-├── chat_store.py        SQLite session persistence
-├── status_display.py    Terminal status spinner
-└── utils.py             LLM HTTP client
+main.py                     Entry point: main loop, command dispatch, tool execution
+├── prompt_engine.py        Builds system prompt from prompts/*.md fragments
+├── context.py              Three-zone context (prefix / history / draft)
+│   └── SpeculativePrefetcher  Auto-resolves undefined symbols from error output
+├── skill.py                Skill base class, registry, tool definition generation
+├── router.py               Flash/Pro model selection with peak-hour awareness
+├── token_counter.py        Token & cost tracking (cache hit/miss, peak multiplier)
+├── predictor.py            OLS-based request duration prediction
+├── cache_warmer.py         Keepalive requests to maintain prefix cache
+├── chat_store.py           SQLite session persistence (messages, usage, predictor state)
+├── session_logger.py       Detailed JSON request/response logging
+├── status_display.py       Rich terminal status spinner with progress bars
+├── config.py               Pydantic-settings config (.env)
+├── models.py               Data models: Message, ToolCall, Function, etc.
+└── utils.py                LLM HTTP client with retry logic
 
-skills/                  Tool implementations (bash, file_ops, etc.)
-code_graph/              AST call graph builder, cache, search
-prompts/                 YAML-front-matter prompt fragments
+skills/                     Tool implementations
+├── bash.py                 Shell command execution
+├── file_ops.py             Read/write/edit/glob/grep/list files
+├── git_ops.py              Git diff
+├── symbol_search.py        Symbol search, callers, read_symbol
+├── py_check.py             Python syntax check & AST summary
+├── web_fetch.py            URL content fetching
+└── filters.py              RTK output filters (ANSI, timestamp, UUID stripping)
+
+code_graph/                 AST-based call graph
+├── builder.py              Scans project, builds Symbol index from AST
+├── symbol.py               Symbol & CallGraph data structures
+├── cache.py                SQLite-backed graph cache with staleness detection
+├── search.py               Symbol search, caller/callee chain traversal
+├── watcher.py              File modification monitor
+├── placeholders.py         [FETCH:] placeholder resolver
+└── imports.py              Import -> file path resolver
+
+prompts/                    YAML front-matter prompt fragments
+├── system.md               Code Agent identity
+├── tools.md                Tool list (injected at runtime)
+├── rules.md                Behavior constraints
+├── jianyan.md              Ultra-concise speech mode
+├── overview.md             Project overview protocol
+├── placeholders.md         [FETCH:] protocol instructions
+└── terse.md                Token-saving hints (disabled by default)
 ```
+
+### Data Flow
+
+```
+User input → ContextManager (append history)
+  → LLMClient.chat() (system + prefix + history + draft)
+    → model response (text | tool_calls)
+      → tool calls → SkillRegistry.execute()
+        → results → ContextManager (append draft)
+          → loop until stop
+```
+
+---
+
+## Token Economy
+
+| Optimization | Savings |
+|---|---|
+| Fixed prefix → cache hit | Input cost ↓ 120x |
+| Call graph → symbol search | Context ↓ 80%+ |
+| Speculative pre-fetch | Round trips ↓ 3–4 |
+| Peak-hour auto-downgrade | Cost ↓ 50% |
+| RTK output filters | Tool output ↓ 60–90% |
+| Duration predictor → accurate ETA | Better UX |
+
+Pricing (DeepSeek V4): Flash ¥2/1M out, Pro ¥6/1M out (peak ×2).
 
 ---
 
@@ -114,42 +174,10 @@ prompts/                 YAML-front-matter prompt fragments
 
 ```
 .dekacode/
-├── chat.db              Conversation history (SQLite)
-├── codegraph_cache.db   Call graph cache (SQLite)
-└── logs/                Session JSON logs
+├── chat.db               Conversation history (SQLite)
+├── codegraph_cache.db    Call graph cache (SQLite)
+└── logs/                 Session JSON logs
 ```
-
----
-
-## Prompt System
-
-Each `.md` file in `prompts/` has YAML front matter:
-
-```yaml
----
-title: My Prompt Section
-description: What this prompt does
-enabled: true
-order: 10
----
-Content here...
-```
-
-Disabled fragments (`enabled: false`) are skipped. The `{tools}` placeholder is replaced with the live skill registry.
-
----
-
-## Token Economy
-
-| Feature | Savings |
-|---------|---------|
-| Fixed prefix → cache hit | Input cost ↓ 120x |
-| Call graph → symbol search | Context ↓ 80%+ |
-| Speculative pre-fetch | Round trips ↓ 3-4 |
-| Peak-hour auto-downgrade | Cost ↓ 50% |
-| RTK output filters | Tool output ↓ 60-90% |
-
-Pricing based on DeepSeek V4: Flash ¥2/1M out, Pro ¥6/1M out (peak hours ×2).
 
 ---
 
