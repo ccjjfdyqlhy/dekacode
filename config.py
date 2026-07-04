@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     auto_downgrade_on_peak: bool = True
     default_model: str = "flash"
-    log_dir: str = ".opencode_logs"
+    log_dir: str = ".dekacode/logs"
     max_session_cost: float = 0.0
     max_tool_iterations: int = 999999
 

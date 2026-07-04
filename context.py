@@ -63,7 +63,26 @@ class ContextManager:
         self.draft: list[Message] = []
 
     def build_request(self) -> list[Message]:
-        return [self._system] + self.prefix + self.history + self.draft
+        msgs = [self._system] + self.prefix + self.history + self.draft
+        return self._sanitize_tool_order(msgs)
+
+    @staticmethod
+    def _sanitize_tool_order(msgs: list[Message]) -> list[Message]:
+        """移除孤立的 tool 消息，确保每条 tool 都有前置 assistant(tool_calls)。"""
+        result: list[Message] = []
+        pending_ids: set[str] = set()
+        for m in msgs:
+            if m.role == "tool":
+                if m.tool_call_id not in pending_ids:
+                    continue
+                result.append(m)
+            else:
+                if m.role == "assistant" and m.tool_calls:
+                    pending_ids = {tc.id for tc in m.tool_calls}
+                else:
+                    pending_ids = set()
+                result.append(m)
+        return result
 
     def commit_draft(self) -> None:
         self.history.extend(self.draft)

@@ -314,7 +314,8 @@ async def run_agent_loop(settings: Settings) -> None:
                 )
         if token_counter.records:
             _console.print(token_counter.session_summary())
-        logger.save()
+        logger.close()
+        _console.print(f"  [dim]log: {logger.path}[/]")
 
     _tool_status_map = {
         "bash": "Bashing", "read_file": "Reading", "write_file": "Writing",
@@ -539,6 +540,8 @@ async def run_agent_loop(settings: Settings) -> None:
             _last_saved_len = min(_last_saved_len, len(ctx.history))
             _attach_imports(ctx, user_input)
             ctx.add_user_message(user_input)
+            _turn_elapsed = 0.0
+            logger.log_turn_start(user_input, model_mode)
 
             _rebuild_graph_if_dirty()
             turn_start_idx = len(token_counter.records)
@@ -557,19 +560,32 @@ async def run_agent_loop(settings: Settings) -> None:
                 tools = registry.get_tool_definitions()
                 request = ctx.build_request()
                 output_limit = 4096 if turn == 0 else 2048
+                logger.log_request(request, tools, model_mode, output_limit)
                 try:
                     await display.status("Thinking")
+                    t0 = time.time()
                     response = await client.chat(request, tools, model_mode=model_mode, max_tokens=output_limit)
+                    elapsed = time.time() - t0
                 except Exception as e:
                     error_text = str(e)
                     ctx.rollback_draft()
                     if "tool" in error_text and "tool_calls" in error_text:
-                        _console.print("  [yellow]⟳ Tool role mismatch, retrying once...[/]")
-                        try:
-                            response = await client.chat(request, tools, model_mode=model_mode, max_tokens=output_limit)
-                        except Exception as e2:
+                        retries = 10
+                        ok = False
+                        for attempt in range(retries):
+                            _console.print(f"  [yellow]⟳ Tool role mismatch, retry {attempt+1}/{retries}...[/]")
+                            try:
+                                t0 = time.time()
+                                response = await client.chat(request, tools, model_mode=model_mode, max_tokens=output_limit)
+                                elapsed = time.time() - t0
+                                ok = True
+                                break
+                            except Exception as e2:
+                                error_text = str(e2)
+                                ctx.rollback_draft()
+                        if not ok:
                             await display.end()
-                            _console.print(f"  [red]✗ API Error (retry failed):[/] {e2}")
+                            _console.print(f"  [red]✗ API Error (retry failed after {retries} attempts):[/] {error_text}")
                             break
                     else:
                         await display.end()
@@ -583,13 +599,16 @@ async def run_agent_loop(settings: Settings) -> None:
                     ctx.rollback_draft()
                     break
 
-                rec = token_counter.record(response, model=model_mode)
-                display.token(token_counter.display(rec))
+                rec = token_counter.record(response, model=model_mode, elapsed=elapsed)
+                _turn_elapsed += elapsed
+                usage_text = token_counter.display(rec)
+                display.token(usage_text)
+                logger.log_response(response, elapsed, usage_text)
 
                 if settings.max_session_cost > 0 and token_counter.session_cost > settings.max_session_cost:
                     await display.end()
                     _console.print(f"  [red]Budget exceeded:[/] ¥{token_counter.session_cost:.4f} > ¥{settings.max_session_cost:.4f}")
-                    logger.save()
+                    logger.close()
                     _clean_exit = True
                     return
 
@@ -701,6 +720,8 @@ async def run_agent_loop(settings: Settings) -> None:
                             ("out  ", "dim"),
                             ("│ ", "dim"),
                             (f"¥{turn_total_cost:.4f}", "bold yellow"),
+                            ("  │ ", "dim"),
+                            (f"{_turn_elapsed:.1f}s", "magenta"),
                         ))
                         if token_counter.records:
                             last = token_counter.records[-1]
@@ -714,6 +735,8 @@ async def run_agent_loop(settings: Settings) -> None:
                                 (f"{cache_pct:.0f}%", "green"),
                                 ("  Output ", "dim"),
                                 (f"{out_pct:.1f}%", "yellow"),
+                                ("  │ ", "dim"),
+                                (f"{_turn_elapsed:.1f}s", "magenta"),
                             ))
                     else:
                         await display.end()
@@ -746,14 +769,14 @@ async def run_agent_loop(settings: Settings) -> None:
                 cost=summary_cost,
             )
             turn_start_idx = len(token_counter.records)
-            logger.log_turn({
-                "user_message": user_input[:200],
+            logger.log_turn_summary({
                 "turns": turn + 1,
                 "model": model_mode,
                 "input_tokens": summary_in,
                 "output_tokens": summary_out,
                 "cache_hit_input": summary_cache,
                 "cost": summary_cost,
+                "elapsed": round(_turn_elapsed, 1),
             })
             warmer.set_context(ctx, model_mode)
 

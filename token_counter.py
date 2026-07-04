@@ -30,6 +30,7 @@ class UsageRecord:
     cache_miss_input: int = 0
     cost: float = 0.0
     peak_hours: bool = False
+    elapsed: float = 0.0
 
     @property
     def total_tokens(self) -> int:
@@ -41,7 +42,7 @@ class TokenCounter:
     records: list[UsageRecord] = field(default_factory=list)
     session_cost: float = 0.0
 
-    def record(self, response: dict, model: str = "flash") -> UsageRecord:
+    def record(self, response: dict, model: str = "flash", elapsed: float = 0.0) -> UsageRecord:
         usage = response.get("usage", {})
         prompt_tokens = usage.get("prompt_tokens", 0)
         completion_tokens = usage.get("completion_tokens", 0)
@@ -72,6 +73,7 @@ class TokenCounter:
             cache_miss_input=miss_input,
             cost=cost,
             peak_hours=peak,
+            elapsed=elapsed,
         )
         self.records.append(rec)
         self.session_cost += cost
@@ -80,20 +82,23 @@ class TokenCounter:
     def display(self, rec: UsageRecord) -> str:
         peak_tag = " [red]⚡[/]" if rec.peak_hours else ""
         hit_pct = (rec.cache_hit_input / rec.input_tokens * 100) if rec.input_tokens > 0 else 0
+        time_tag = f" [magenta]{rec.elapsed:.1f}s[/]" if rec.elapsed else ""
         return (
             f"  [yellow]↑[/] {rec.input_tokens} [dim]in[/] "
             f"[dim](cache [/]{rec.cache_hit_input}/{hit_pct:.0f}%[dim])[/] "
             f"[cyan]↓[/] {rec.output_tokens} [dim]out[/] "
-            f"[dim]│[/] [bold yellow]¥{rec.cost:.4f}[/]{peak_tag}"
+            f"[dim]│[/] [bold yellow]¥{rec.cost:.4f}[/]{peak_tag}{time_tag}"
         )
 
     def session_summary(self) -> str:
         total_in = sum(r.input_tokens for r in self.records)
         total_out = sum(r.output_tokens for r in self.records)
         total_cache = sum(r.cache_hit_input for r in self.records)
+        total_elapsed = sum(r.elapsed for r in self.records)
+        time_tag = f"  [magenta]{total_elapsed:.1f}s[/]" if total_elapsed else ""
         return (
             f"  [yellow]∑[/] {total_in} [dim]in[/] "
             f"[cyan]↓[/] {total_out} [dim]out[/] "
             f"[dim]cache [/]{total_cache}/{total_in-total_cache} "
-            f"[dim]│[/] [bold yellow]¥{self.session_cost:.4f}[/]"
+            f"[dim]│[/] [bold yellow]¥{self.session_cost:.4f}[/]{time_tag}"
         )
