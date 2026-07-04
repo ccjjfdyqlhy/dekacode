@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 
 from config import Settings
@@ -71,21 +73,45 @@ class LLMClient:
             body["tools"] = [t.model_dump(exclude_none=True) for t in tools]
             body["tool_choice"] = "auto"
 
-        async with httpx.AsyncClient(timeout=180) as client:
-            resp = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=body,
-            )
-            if resp.status_code == 401:
-                raise PermissionError("Authentication failed — check your API key")
+        max_retries = 3
+        last_error: Exception | None = None
+        for attempt in range(max_retries):
             try:
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                error_body = resp.text
-                raise RuntimeError(
-                    f"HTTP {resp.status_code}: {error_body[:2000]}"
-                ) from e
-            return resp.json()
+                async with httpx.AsyncClient(timeout=180) as client:
+                    resp = await client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=headers,
+                        json=body,
+                    )
+                    if resp.status_code == 401:
+                        raise PermissionError("Authentication failed — check your API key")
+                    try:
+                        resp.raise_for_status()
+                    except httpx.HTTPStatusError as e:
+                        error_body = resp.text
+                        if resp.status_code == 429 or resp.status_code >= 500:
+                            if attempt < max_retries - 1:
+                                wait = 2 ** attempt
+                                last_error = RuntimeError(
+                                    f"HTTP {resp.status_code} (retry {attempt+1}/{max_retries} in {wait}s): {error_body[:200]}"
+                                )
+                                await asyncio.sleep(wait)
+                                continue
+                            raise
+                        raise RuntimeError(
+                            f"HTTP {resp.status_code}: {error_body[:2000]}"
+                        ) from e
+                    return resp.json()
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    last_error = RuntimeError(
+                        f"Connection error (retry {attempt+1}/{max_retries} in {wait}s): {e}"
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                raise
+
+        raise last_error or RuntimeError("API request failed after all retries")
 
 

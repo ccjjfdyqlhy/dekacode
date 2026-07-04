@@ -57,12 +57,13 @@ class SpeculativePrefetcher:
 
 class ContextManager:
     def __init__(self, system_prompt: str):
-        self.prefix: list[Message] = [Message(role="system", content=system_prompt)]
+        self._system = Message(role="system", content=system_prompt)
+        self.prefix: list[Message] = []
         self.history: list[Message] = []
         self.draft: list[Message] = []
 
     def build_request(self) -> list[Message]:
-        return self.prefix + self.history + self.draft
+        return [self._system] + self.prefix + self.history + self.draft
 
     def commit_draft(self) -> None:
         self.history.extend(self.draft)
@@ -83,7 +84,7 @@ class ContextManager:
         )
 
     def total_messages(self) -> int:
-        return len(self.prefix) + len(self.history) + len(self.draft)
+        return 1 + len(self.prefix) + len(self.history) + len(self.draft)
 
     def set_prefix_attachment(self, content: str) -> None:
         attachment = Message(role="system", content=content)
@@ -92,4 +93,4 @@ class ContextManager:
             self.prefix.append(attachment)
 
     def clear_prefix_attachments(self) -> None:
-        self.prefix = [self.prefix[0]]
+        self.prefix.clear()

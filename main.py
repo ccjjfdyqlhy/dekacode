@@ -108,6 +108,7 @@ def _setup_registry(graph=None) -> SkillRegistry:
 
 def _attach_imports(ctx: ContextManager, user_input: str) -> None:
     from code_graph.imports import ImportResolver
+    from models import Message
     matches = _FILE_REF_RE.findall(user_input)
     if not matches:
         return
@@ -120,7 +121,7 @@ def _attach_imports(ctx: ContextManager, user_input: str) -> None:
             blocks.append(f"# imports from {fpath}\n{lines}")
     if blocks:
         attachment = "\n\n".join(blocks)
-        ctx.set_prefix_attachment(f"# Resolved imports\n{attachment}")
+        ctx.history.append(Message(role="system", content=f"# Resolved imports\n{attachment}"))
 
 
 def _build_graph(project_root: str):
@@ -174,13 +175,6 @@ async def run_agent_loop(settings: Settings) -> None:
     prompt_engine.load_all()
     tool_lines = prompt_engine.build_tool_descriptions(registry)
     system_prompt = prompt_engine.build_system_prompt(tool_lines)
-    _console.print(Text.assemble(
-        ("  Prompts: ", "dim"),
-        (f"{len(prompt_engine.get_enabled())} enabled", "green"),
-    ))
-    for line in prompt_engine.summary().split("\n"):
-        _console.print(Text(f"  {line}", style="dim"))
-
     ctx = ContextManager(system_prompt)
     token_counter = TokenCounter()
     prefetcher = SpeculativePrefetcher(graph)
@@ -210,7 +204,7 @@ async def run_agent_loop(settings: Settings) -> None:
     ))
     _console.print(Text.assemble(
         ("  Commands: ", "dim"),
-        *[pair for cmd in ["cost", "stats", "graph", "sessions", "resume", "save", "load", "flash", "pro", "mode", "help"]
+        *[pair for cmd in ["cost", "stats", "prompts", "graph", "sessions", "resume", "save", "load", "flash", "pro", "mode", "help"]
         for pair in [(f"/{cmd}", "cyan"), (" ", "dim")]],
     ))
     _console.print("  [dim]Type your message or 'exit' to quit.[/]\n")
@@ -360,7 +354,7 @@ async def run_agent_loop(settings: Settings) -> None:
                 table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
                 table.add_column("Key", style="bold", no_wrap=True)
                 table.add_column("Value")
-                table.add_row("Context", f"[cyan]prefix={len(ctx.prefix)}[/] [cyan]history={len(ctx.history)}[/] [cyan]draft={len(ctx.draft)}[/] [dim]total={total}[/]")
+                table.add_row("Context", f"[cyan]system=1[/] [cyan]prefix={len(ctx.prefix)}[/] [cyan]history={len(ctx.history)}[/] [cyan]draft={len(ctx.draft)}[/] [dim]total={total}[/]")
                 table.add_row("API calls", f"[yellow]{len(token_counter.records)}[/]")
                 table.add_row("Graph", f"[green]{graph.total_symbols()}[/] [dim]symbols,[/] [green]{len(graph.files)}[/] [dim]files[/]")
                 table.add_row("Model", f"[magenta]{model_mode}[/] [dim]({current_model_name})[/]")
@@ -437,12 +431,33 @@ async def run_agent_loop(settings: Settings) -> None:
                     ("peak", "red") if peak else ("ok", "green"),
                 ))
 
+            elif user_input == "/prompts":
+                table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+                table.add_column("", style="green")
+                table.add_column("Prompt", style="bold")
+                table.add_column("Order", style="dim")
+                table.add_column("Description", style="dim")
+                for line in prompt_engine.summary().split("\n"):
+                    flag = "✓" if "✓" in line else "✗"
+                    rest = line.replace("[✓]", "").replace("[✗]", "").strip()
+                    parts = rest.split("(order=")
+                    title = parts[0].strip()
+                    order = parts[1].rstrip(")") if len(parts) > 1 else ""
+                    desc = ""
+                    for frag in prompt_engine.fragments:
+                        if frag.title == title:
+                            desc = frag.description
+                            break
+                    table.add_row(flag, title, order, desc)
+                _console.print(table)
+
             elif user_input == "/help":
                 table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
                 table.add_column("Command", style="cyan", no_wrap=True)
                 table.add_column("Description", style="dim")
                 table.add_row("/cost", "Show session token cost")
                 table.add_row("/stats", "Show context stats")
+                table.add_row("/prompts", "List enabled/disabled prompt fragments")
                 table.add_row("/graph", "Show project symbol map")
                 table.add_row("/sessions", "List saved chat sessions")
                 table.add_row("/resume", "Load most recent session")
@@ -462,8 +477,8 @@ async def run_agent_loop(settings: Settings) -> None:
                     chat_store.create_session()
                 _trim_history(ctx)
                 _last_saved_len = min(_last_saved_len, len(ctx.history))
-                ctx.add_user_message(user_input)
                 _attach_imports(ctx, user_input)
+                ctx.add_user_message(user_input)
 
                 _rebuild_graph_if_dirty()
                 turn_start_idx = len(token_counter.records)
@@ -527,45 +542,48 @@ async def run_agent_loop(settings: Settings) -> None:
                         if content:
                             _console.print(Markdown(content))
 
-                        for tc in parsed:
+                        async def _exec_one(tc):
                             try:
-                                try:
-                                    args = json.loads(tc.function.arguments)
-                                except json.JSONDecodeError as e:
-                                    result_text = f"[Parse Error] Invalid JSON arguments: {e}"
-                                else:
-                                    tool_label = {
-                                        "bash": "Bashing",
-                                        "read_file": "Reading",
-                                        "write_file": "Writing",
-                                        "glob": "Globbing",
-                                        "grep": "Grepping",
-                                        "web_fetch": "Fetching",
-                                        "symbol_search": "Searching",
-                                        "callers": "Tracing",
-                                        "read_symbol": "Reading",
-                                        "py_check": "Checking",
-                                    }.get(tc.function.name, "Working")
-                                    detail = _get_tool_detail(tc.function.name, args)
-                                    if tc.function.name == "bash":
-                                        cmd = args.get("command", "")
-                                        if cmd.lstrip().startswith("grep"):
-                                            tool_label = "Grepping"
-                                    await display.status(tool_label, detail)
-                                    result = await registry.execute(tc.function.name, args)
-                                    result_text = result.output if result.success else f"[Error] {result.output}"
+                                args = json.loads(tc.function.arguments)
+                                result = await registry.execute(tc.function.name, args)
+                                return (tc, result.output if result.success else f"[Error] {result.output}")
+                            except json.JSONDecodeError as e:
+                                return (tc, f"[Parse Error] Invalid JSON arguments: {e}")
                             except Exception as e:
-                                result_text = f"[Error] Tool crashed: {type(e).__name__}: {e}"
+                                return (tc, f"[Error] Tool crashed: {type(e).__name__}: {e}")
 
+                        if len(parsed) > 1:
+                            await display.status("Batching", f"{len(parsed)} tool calls")
+                        else:
+                            t = parsed[0]
+                            try:
+                                a = json.loads(t.function.arguments)
+                                lbl = {
+                                    "bash": "Bashing", "read_file": "Reading",
+                                    "write_file": "Writing", "glob": "Globbing",
+                                    "grep": "Grepping", "web_fetch": "Fetching",
+                                    "symbol_search": "Searching", "callers": "Tracing",
+                                    "read_symbol": "Reading", "py_check": "Checking",
+                                }.get(t.function.name, "Working")
+                                det = _get_tool_detail(t.function.name, a)
+                                if t.function.name == "bash":
+                                    cmd = a.get("command", "")
+                                    if cmd.lstrip().startswith("grep"):
+                                        lbl = "Grepping"
+                                await display.status(lbl, det)
+                            except json.JSONDecodeError:
+                                pass
+
+                        tool_results = await asyncio.gather(*[_exec_one(tc) for tc in parsed])
+
+                        for tc, result_text in tool_results:
                             if tc.function.name == "bash":
                                 result_text = OutputFilter.bash(result_text)
                             elif tc.function.name == "grep":
                                 result_text = OutputFilter.grep(result_text)
                             elif tc.function.name == "web_fetch":
                                 result_text = OutputFilter.web_fetch(result_text)
-
                             ctx.add_tool_result(tc.id, tc.function.name, result_text)
-
                             undefined = prefetcher.analyze(result_text)
                             if undefined:
                                 await display.status("Prefetching")
