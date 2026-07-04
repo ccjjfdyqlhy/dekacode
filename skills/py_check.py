@@ -63,3 +63,52 @@ class PyCheckSkill(Skill):
             lines.extend(failed)
 
         return SkillResult(success=len(failed) == 0, output="\n".join(lines))
+
+
+class AstSummarySkill(Skill):
+    @property
+    def name(self) -> str:
+        return "ast_summary"
+
+    @property
+    def description(self) -> str:
+        return "List class/function definitions in a Python file (line numbers only, no body). Uses far fewer tokens than read_file."
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the Python file to analyze",
+                },
+            },
+            "required": ["file_path"],
+        }
+
+    async def execute(self, file_path: str, **kwargs) -> SkillResult:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                source = f.read()
+            tree = ast.parse(source, filename=file_path)
+
+            def _walk(node: ast.AST, indent: str = "") -> list[str]:
+                results: list[str] = []
+                for child in ast.iter_child_nodes(node):
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        results.append(f"{indent}{child.lineno}: def {child.name}")
+                    elif isinstance(child, ast.ClassDef):
+                        results.append(f"{indent}{child.lineno}: class {child.name}")
+                        results.extend(_walk(child, indent + "  "))
+                return results
+
+            lines: list[str] = [f"# {file_path}"]
+            lines.extend(_walk(tree))
+            if len(lines) == 1:
+                lines.append("(no class/function definitions found)")
+            return SkillResult(success=True, output="\n".join(lines))
+        except SyntaxError as e:
+            return SkillResult(success=False, output=f"Syntax error: {e}")
+        except Exception as e:
+            return SkillResult(success=False, output=str(e))

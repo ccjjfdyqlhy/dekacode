@@ -1,6 +1,9 @@
+import asyncio
+import fnmatch
 import glob as glob_module
 import os
 import re
+from pathlib import Path
 
 from models import SkillResult
 from skill import Skill
@@ -207,5 +210,233 @@ class GrepSkill(Skill):
             if len(output) > 20000:
                 output = output[:20000] + f"\n\n[...{len(matches)} matches, {total} chars total, truncated to 20000]"
             return SkillResult(success=True, output=f"({len(matches)} matches)\n{output}")
+        except Exception as e:
+            return SkillResult(success=False, output=str(e))
+
+
+class EditFileSkill(Skill):
+    @property
+    def name(self) -> str:
+        return "edit_file"
+
+    @property
+    def description(self) -> str:
+        return "Edit a file by replacing an exact text segment (search-and-replace). Uses far fewer tokens than read+write for small changes."
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to the file to edit",
+                },
+                "old_string": {
+                    "type": "string",
+                    "description": "The exact text to search for (must match exactly one occurrence)",
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "The replacement text",
+                },
+            },
+            "required": ["file_path", "old_string", "new_string"],
+        }
+
+    async def execute(self, file_path: str, old_string: str, new_string: str, **kwargs) -> SkillResult:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            occurrences = content.count(old_string)
+            if occurrences == 0:
+                return SkillResult(success=False, output=f"edit_file: string not found in {file_path}")
+            if occurrences > 1:
+                return SkillResult(success=False, output=f"edit_file: found {occurrences} occurrences in {file_path}, must be unique — provide more surrounding context")
+            new_content = content.replace(old_string, new_string)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            old_lines = old_string.count("\n") + 1
+            new_lines = new_string.count("\n") + 1
+            return SkillResult(success=True, output=f"Edited {file_path}: {old_lines} lines → {new_lines} lines")
+        except Exception as e:
+            return SkillResult(success=False, output=str(e))
+
+
+class ReadFilesSkill(Skill):
+    @property
+    def name(self) -> str:
+        return "read_files"
+
+    @property
+    def description(self) -> str:
+        return "Read multiple files at once (saves tokens vs multiple read_file calls)"
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of file paths to read",
+                },
+            },
+            "required": ["paths"],
+        }
+
+    async def execute(self, paths: list[str], **kwargs) -> SkillResult:
+        results: list[str] = []
+        for path in paths:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                total = len(content)
+                if total > 30000:
+                    content = content[:30000] + f"\n\n[...{total} chars total, truncated to 30000]"
+                results.append(f"# {path} ({total} chars)\n{content}")
+            except Exception as e:
+                results.append(f"# {path}\n[Error] {e}")
+        output = "\n\n".join(results)
+        if len(output) > 50000:
+            output = output[:50000] + f"\n\n[...total output {len(output)} chars, truncated to 50000]"
+        return SkillResult(success=True, output=output)
+
+
+class GrepContextSkill(Skill):
+    @property
+    def name(self) -> str:
+        return "grep_context"
+
+    @property
+    def description(self) -> str:
+        return "Search file contents with surrounding context lines (saves tokens vs grep + read_file)"
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Regular expression pattern to search for",
+                },
+                "include": {
+                    "type": "string",
+                    "description": "Glob pattern to filter files (e.g. '*.py')",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Root directory to search (default: current directory)",
+                },
+                "context": {
+                    "type": "integer",
+                    "description": "Number of context lines before and after each match (default: 3)",
+                },
+            },
+            "required": ["pattern"],
+        }
+
+    async def execute(self, pattern: str, include: str | None = None, path: str = ".", context: int = 3, **kwargs) -> SkillResult:
+        try:
+            compiled = re.compile(pattern)
+            matches: list[str] = []
+            if include:
+                full_pattern = os.path.join(path, include)
+                candidates = glob_module.glob(full_pattern, recursive=True)
+            else:
+                candidates = []
+                for root, _dirs, files in os.walk(path):
+                    for f in files:
+                        candidates.append(os.path.join(root, f))
+
+            for fpath in sorted(candidates):
+                if not os.path.isfile(fpath):
+                    continue
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                        lines = f.readlines()
+                    for i, line in enumerate(lines, 1):
+                        if compiled.search(line):
+                            start = max(0, i - 1 - context)
+                            end = min(len(lines), i + context)
+                            ctx = []
+                            for j in range(start, end):
+                                marker = ">" if j == i - 1 else " "
+                                ctx.append(f"{marker} {j+1}:{lines[j].rstrip()}")
+                            matches.append(f"# {fpath}:{i}\n" + "\n".join(ctx))
+                except Exception:
+                    continue
+
+            if not matches:
+                return SkillResult(success=True, output="No matches found")
+            output = "\n\n".join(matches)
+            total = len(output)
+            if total > 30000:
+                output = output[:30000] + f"\n\n[...{len(matches)} matches, {total} chars total, truncated to 30000]"
+            return SkillResult(success=True, output=f"({len(matches)} matches)\n{output}")
+        except Exception as e:
+            return SkillResult(success=False, output=str(e))
+
+
+class ListDirSkill(Skill):
+    @property
+    def name(self) -> str:
+        return "list_dir"
+
+    @property
+    def description(self) -> str:
+        return "List project directory structure as a tree (up to given depth)"
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Root directory (default: current directory)",
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "Maximum depth of directory tree (default: 3)",
+                },
+                "include": {
+                    "type": "string",
+                    "description": "Glob pattern to filter files (e.g. '*.py')",
+                },
+            },
+        }
+
+    async def execute(self, path: str = ".", depth: int = 3, include: str | None = None, **kwargs) -> SkillResult:
+        try:
+            root_path = Path(path).resolve()
+            lines: list[str] = [f"# {root_path}"]
+
+            def _walk(dir_path: Path, current_depth: int) -> None:
+                if current_depth > depth:
+                    return
+                try:
+                    entries = sorted(dir_path.iterdir(), key=lambda x: (not x.is_dir(), x.name))
+                except PermissionError:
+                    return
+                for entry in entries:
+                    if entry.name.startswith(".") or entry.name in ("__pycache__", "node_modules", ".git"):
+                        continue
+                    indent = "  " * (current_depth - 1)
+                    if entry.is_dir():
+                        lines.append(f"{indent}{entry.name}/")
+                        _walk(entry, current_depth + 1)
+                    elif entry.is_file():
+                        if include and not fnmatch.fnmatch(entry.name, include):
+                            continue
+                        lines.append(f"{indent}{entry.name}")
+
+            _walk(root_path, 1)
+            output = "\n".join(lines)
+            if len(output) > 20000:
+                output = output[:20000] + f"\n[...truncated, total {len(output)} chars]"
+            return SkillResult(success=True, output=output)
         except Exception as e:
             return SkillResult(success=False, output=str(e))

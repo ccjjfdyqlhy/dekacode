@@ -55,6 +55,9 @@ class LLMClient:
         messages: list[Message],
         tools: list[ToolDefinition] | None = None,
         model_mode: str = "flash",
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        tool_choice: str | None = None,
     ) -> dict:
         if model_mode != "flash":
             self.switch_model(model_mode)
@@ -71,7 +74,11 @@ class LLMClient:
         }
         if tools:
             body["tools"] = [t.model_dump(exclude_none=True) for t in tools]
-            body["tool_choice"] = "auto"
+            body["tool_choice"] = tool_choice or "auto"
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
+        if temperature is not None:
+            body["temperature"] = temperature
 
         max_retries = 3
         last_error: Exception | None = None

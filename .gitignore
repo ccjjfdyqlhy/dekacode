@@ -8,4 +8,4 @@ build/
 venv/
 .dekacode/
 .opencode_logs/
-*.codegraph_cache.db
+temp/
