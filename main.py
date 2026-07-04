@@ -5,7 +5,7 @@ import re
 import sys
 import time
 
-VERSION = "V0.2.1"
+VERSION = "V0.2.3"
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -31,6 +31,7 @@ from status_display import StatusDisplay
 from token_counter import TokenCounter
 from utils import LLMClient
 from cache_warmer import CacheWarmer
+from predictor import DurationPredictor
 
 _FILE_REF_RE = re.compile(r"([\w./\\-]+\.py)")
 
@@ -208,6 +209,9 @@ async def run_agent_loop(settings: Settings) -> None:
     logger = SessionLogger(log_dir=settings.log_dir)
     chat_store = ChatStore(project_root)
 
+    predictor_state = chat_store.load_predictor_state()
+    predictor = DurationPredictor.from_dict(predictor_state)
+
     compact_map = graph.to_compact_map()
     ctx.set_prefix_attachment(f"# Project structure\n{compact_map[:2000]}")
     _prefix_stable_len = 1 + len(ctx.prefix)  # system + prefix（不包含 history/draft）
@@ -267,6 +271,7 @@ async def run_agent_loop(settings: Settings) -> None:
     _last_saved_len = 0
     _last_user_input = ""
     _history_snapshots: list[int] = []
+    _last_turn_elapsed = 0.0
     _kb = KeyBindings()
 
     @_kb.add('escape', 'enter')
@@ -314,6 +319,8 @@ async def run_agent_loop(settings: Settings) -> None:
                 )
         if token_counter.records:
             _console.print(token_counter.session_summary())
+        state = predictor.to_dict()
+        chat_store.save_predictor_state(**state)
         logger.close()
         _console.print(f"  [dim]log: {logger.path}[/]")
 
@@ -541,6 +548,7 @@ async def run_agent_loop(settings: Settings) -> None:
             _attach_imports(ctx, user_input)
             ctx.add_user_message(user_input)
             _turn_elapsed = 0.0
+            _turn_estimated = _last_turn_elapsed or 60.0
             logger.log_turn_start(user_input, model_mode)
 
             _rebuild_graph_if_dirty()
@@ -559,10 +567,15 @@ async def run_agent_loop(settings: Settings) -> None:
                         _prefix_hash = cur_hash
                 tools = registry.get_tool_definitions()
                 request = ctx.build_request()
-                output_limit = 4096 if turn == 0 else 2048
+                output_limit = 8192
                 logger.log_request(request, tools, model_mode, output_limit)
+                prev_rec = token_counter.records[-1] if token_counter.records else None
+                est_cache = prev_rec.cache_hit_input if prev_rec else 0
+                est_out = prev_rec.output_tokens if prev_rec else 1024
+                req_size = sum(len(m.content or "") for m in request)
+                est_dur = predictor.predict(req_size, est_cache, est_out)
                 try:
-                    await display.status("Thinking")
+                    await display.status("Thinking", turn_estimated=_turn_estimated)
                     t0 = time.time()
                     response = await client.chat(request, tools, model_mode=model_mode, max_tokens=output_limit)
                     elapsed = time.time() - t0
@@ -601,9 +614,12 @@ async def run_agent_loop(settings: Settings) -> None:
 
                 rec = token_counter.record(response, model=model_mode, elapsed=elapsed)
                 _turn_elapsed += elapsed
+                if _turn_elapsed > _turn_estimated * 0.85:
+                    _turn_estimated = _turn_elapsed * 2
                 usage_text = token_counter.display(rec)
                 display.token(usage_text)
                 logger.log_response(response, elapsed, usage_text)
+                predictor.add(rec.input_tokens, rec.cache_hit_input, rec.output_tokens, elapsed)
 
                 if settings.max_session_cost > 0 and token_counter.session_cost > settings.max_session_cost:
                     await display.end()
@@ -615,6 +631,14 @@ async def run_agent_loop(settings: Settings) -> None:
                 msg = choices[0].get("message", {})
                 content = msg.get("content") or ""
                 tool_calls = msg.get("tool_calls")
+                finish_reason = choices[0].get("finish_reason", "stop")
+
+                if finish_reason == "length":
+                    partial = Message(role="assistant", content=content or None)
+                    ctx.add_assistant_message(partial)
+                    ctx.add_user_message("continue")
+                    _console.print(f"  [yellow]⟳ Response truncated, continuing...[/]")
+                    continue
 
                 assistant = Message(role="assistant", content=content or None)
 
@@ -753,6 +777,7 @@ async def run_agent_loop(settings: Settings) -> None:
             summary_out = sum(r.output_tokens for r in turn_records)
             summary_cache = sum(r.cache_hit_input for r in turn_records)
             summary_cost = sum(r.cost for r in turn_records)
+            _last_turn_elapsed = _turn_elapsed
             _turn_number += 1
 
             unsaved = ctx.history[_last_saved_len:]

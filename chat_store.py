@@ -51,7 +51,18 @@ class ChatStore:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (session_id) REFERENCES sessions(id)
                 );
+                CREATE TABLE IF NOT EXISTS predictor_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    w1 REAL DEFAULT 0.0,
+                    w2 REAL DEFAULT 0.0,
+                    b REAL DEFAULT 0.0,
+                    n INTEGER DEFAULT 0
+                );
             """)
+            # 确保默认行存在
+            conn.execute(
+                "INSERT OR IGNORE INTO predictor_state (id, w1, w2, b, n) VALUES (1, 0.0, 0.0, 0.0, 0)"
+            )
 
     def create_session(self) -> str:
         now = datetime.now().isoformat()
@@ -134,13 +145,17 @@ class ChatStore:
     def list_sessions(self, limit: int = 20) -> list[dict]:
         with sqlite3.connect(str(self.db_path)) as conn:
             cur = conn.execute(
-                "SELECT s.id, s.created_at, s.updated_at, s.summary, COUNT(m.id) as msg_count, "
-                "COALESCE(SUM(u.cost), 0) as total_cost, "
-                "COALESCE(SUM(u.input_tokens), 0) as total_input "
+                "SELECT s.id, s.created_at, s.updated_at, s.summary, "
+                "COALESCE(m.cnt, 0), "
+                "COALESCE(u.cost, 0), "
+                "COALESCE(u.tok, 0) "
                 "FROM sessions s "
-                "LEFT JOIN messages m ON s.id = m.session_id "
-                "LEFT JOIN turn_usage u ON s.id = u.session_id "
-                "GROUP BY s.id ORDER BY s.updated_at DESC LIMIT ?",
+                "LEFT JOIN (SELECT session_id, COUNT(*) AS cnt FROM messages GROUP BY session_id) m "
+                "  ON s.id = m.session_id "
+                "LEFT JOIN (SELECT session_id, SUM(cost) AS cost, SUM(input_tokens) AS tok "
+                "           FROM turn_usage GROUP BY session_id) u "
+                "  ON s.id = u.session_id "
+                "ORDER BY s.updated_at DESC LIMIT ?",
                 (limit,),
             )
             return [
@@ -192,6 +207,20 @@ class ChatStore:
                 "SELECT COALESCE(SUM(cost), 0) FROM turn_usage WHERE session_id = ?", (sid,)
             )
             return cur.fetchone()[0]
+
+    def save_predictor_state(self, w1: float, w2: float, b: float, n: int) -> None:
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute(
+                "UPDATE predictor_state SET w1=?, w2=?, b=?, n=? WHERE id=1",
+                (w1, w2, b, n),
+            )
+
+    def load_predictor_state(self) -> dict:
+        with sqlite3.connect(str(self.db_path)) as conn:
+            row = conn.execute("SELECT w1, w2, b, n FROM predictor_state WHERE id=1").fetchone()
+            if row:
+                return {"w1": row[0], "w2": row[1], "b": row[2], "n": row[3]}
+            return {"w1": 0.0, "w2": 0.0, "b": 0.0, "n": 0}
 
     def update_summary(self, summary: str) -> None:
         if not self._session_id:
