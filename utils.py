@@ -24,6 +24,11 @@ class LLMClient:
                     "api_key": "",
                     "model": self.settings.lmstudio_model,
                 },
+                "openai": {
+                    "base_url": self.settings.openai_base_url.rstrip("/"),
+                    "api_key": self.settings.openai_api_key,
+                    "model": self.settings.openai_model,
+                },
             }
         else:
             self._providers = {
@@ -36,6 +41,11 @@ class LLMClient:
                     "base_url": (self.settings.pro_base_url or self.settings.openai_base_url).rstrip("/"),
                     "api_key": self.settings.pro_api_key or self.settings.openai_api_key,
                     "model": self.settings.pro_model or self.settings.openai_model,
+                },
+                "openai": {
+                    "base_url": self.settings.openai_base_url.rstrip("/"),
+                    "api_key": self.settings.openai_api_key,
+                    "model": self.settings.openai_model,
                 },
             }
 

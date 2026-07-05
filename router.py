@@ -42,7 +42,7 @@ class ModelRouter:
             return "flash"
 
         if peak and self.config.auto_downgrade_on_peak:
-            return "flash"
+            return "openai"
 
         return self.current_model
 

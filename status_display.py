@@ -47,22 +47,32 @@ class StatusDisplay:
         """活跃行：▸ Label  detail  ━━━45%  elapsed/rem  │ tokens"""
         elapsed = time.time() - self._turn_start
         parts = ["  "]
+
+        # 统一使用 ▸▹► 动画
         chars = "▸▹►"
         idx = int(elapsed * 5) % 3
         parts.append(f"[bold cyan]{chars[idx]}[/] ")
+
         parts.append(f"[bold]{self._label}[/]")
         if self._detail:
             parts.append(f"  [dim]{self._detail}[/]")
+
+        # 进度条
         bar = self._progress_bar(elapsed, self._turn_estimated) if self._turn_estimated > 0 else ""
         if bar:
             parts.append(f"  {bar}")
+
         parts.append(f"  [dim]{elapsed:.1f}s[/]")
+
+        # 剩余时间
         if self._turn_estimated > elapsed:
             remaining = self._turn_estimated - elapsed
             parts.append(f"[dim]/ {remaining:.0f}s[/]")
+
         if self._token_str:
             parts.append("  [dim]│[/]  ")
             parts.append(self._token_str)
+
         return "".join(parts)
 
     def _draw(self) -> None:
@@ -82,6 +92,7 @@ class StatusDisplay:
 
     async def status(self, label: str, detail: str = "",
                      turn_estimated: float | None = None) -> None:
+        """通用状态（包括 Thinking 和各种工具执行）"""
         await self._stop_ticker()
         self._label = label
         self._detail = detail

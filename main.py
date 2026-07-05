@@ -205,7 +205,6 @@ async def run_agent_loop(settings: Settings) -> None:
     ctx = ContextManager(system_prompt)
     token_counter = TokenCounter()
     prefetcher = SpeculativePrefetcher(graph)
-    router = ModelRouter()
     logger = SessionLogger(log_dir=settings.log_dir)
     chat_store = ChatStore(project_root)
 
@@ -218,7 +217,19 @@ async def run_agent_loop(settings: Settings) -> None:
     _prefix_hash = hash(str(ctx.build_request()[:_prefix_stable_len]))
     _console.print(f"  [dim]prefix hash: {_prefix_hash}[/]")
 
-    model_mode = settings.default_model or "flash"
+    from router import ModelConfig
+    router_config = ModelConfig(
+        auto_downgrade_on_peak=settings.auto_downgrade_on_peak,
+        flash_model=settings.flash_model or settings.openai_model,
+        pro_model=settings.pro_model or settings.openai_model,
+        flash_api_key=settings.flash_api_key or settings.openai_api_key,
+        pro_api_key=settings.pro_api_key or settings.openai_api_key,
+        flash_base_url=settings.flash_base_url or settings.openai_base_url,
+        pro_base_url=settings.pro_base_url or settings.openai_base_url,
+    )
+    router = ModelRouter(config=router_config)
+
+    model_mode = router.select()
     client.switch_model(model_mode)
     current_model_name = client.model
 
@@ -588,6 +599,7 @@ async def run_agent_loop(settings: Settings) -> None:
                         for attempt in range(retries):
                             _console.print(f"  [yellow]⟳ Tool role mismatch, retry {attempt+1}/{retries}...[/]")
                             try:
+                                await display.status("Thinking", turn_estimated=_turn_estimated)
                                 t0 = time.time()
                                 response = await client.chat(request, tools, model_mode=model_mode, max_tokens=output_limit)
                                 elapsed = time.time() - t0
