@@ -108,6 +108,7 @@ def _setup_registry(graph=None, settings=None) -> SkillRegistry:
     from skills.py_check import PyCheckSkill, AstSummarySkill
     from skills.dekacode import DekaCodeSkill
     from skills.github_ops import GitHubSkill
+    from skills.tree_ops import TreeSkill
 
     registry = SkillRegistry()
     registry.register(WebFetchSkill())
@@ -139,6 +140,7 @@ def _setup_registry(graph=None, settings=None) -> SkillRegistry:
     token = settings.github_token if settings else ""
     base_url = settings.github_base_url if settings else "https://api.github.com"
     registry.register(GitHubSkill(token=token, base_url=base_url))
+    registry.register(TreeSkill())
 
     return registry
 
@@ -351,7 +353,7 @@ async def run_agent_loop(settings: Settings) -> None:
         "diff_file": "Diffing", "ast_summary": "Analyzing",
         "web_fetch": "Fetching", "symbol_search": "Searching", "callers": "Tracing",
         "read_symbol": "Reading", "py_check": "Checking",
-        "github": "GitHubbing",
+        "github": "GitHubbing", "tree": "Discussing",
         "_prefetch": "Prefetching", "_placeholder": "Resolving",
     }
 
@@ -794,6 +796,37 @@ async def run_agent_loop(settings: Settings) -> None:
 
                     ctx.commit_draft()
                     turn += 1
+
+                    # 检测 tree.start → 进入圆桌讨论模式
+                    _tree_branches = []
+                    for tc in parsed:
+                        if tc.function.name == "tree":
+                            try:
+                                ta = json.loads(tc.function.arguments)
+                                if ta.get("action") == "start":
+                                    _tree_branches = ta.get("branches", [])
+                            except Exception:
+                                pass
+                    if _tree_branches:
+                        await display.end()
+                        _console.print(f"\n  [bold cyan]🌳 圆桌讨论启动（{len(_tree_branches)} 个视角）[/]")
+                        from skills.core.thought_tree import RoundTable
+                        rt = RoundTable(
+                            system_prompt=ctx._system.content,
+                            prefix=ctx.prefix,
+                            branches_data=_tree_branches,
+                            max_rounds=3,
+                        )
+                        final = await rt.run(
+                            client, registry, model_mode,
+                            token_counter=token_counter,
+                            console=_console, display=display,
+                        )
+                        _console.print("")
+                        _console.print(Markdown(final))
+                        if final:
+                            ctx.add_assistant_message(Message(role="assistant", content=final))
+                        break
                 else:
                     if content:
                         resolver = PlaceholderResolver(graph)

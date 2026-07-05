@@ -11,3 +11,4 @@ Rules:
 4. Prefer absolute paths for file operations.
 5. Be thorough — explore the codebase before making changes.
 6. Each time you call a tool, include a brief description (≤20 tokens) in the content field alongside the tool_calls, explaining what you are currently doing. This description will be displayed in the status line instead of a progress bar.
+7. For multi-faceted problems, use tree.start() to launch a round-table discussion. Each branch explores one aspect, communicates via tree.speak(), and coordinates to reach a consensus. Any branch can call tree.conclude() to finish.
