@@ -187,6 +187,18 @@ class ChatStore:
                 for r in cur.fetchall()
             ]
 
+    def load_all_usage(self) -> list[dict]:
+        with sqlite3.connect(str(self.db_path)) as conn:
+            cur = conn.execute(
+                "SELECT session_id, model, input_tokens, output_tokens, cache_hit_input, cost "
+                "FROM turn_usage ORDER BY session_id, turn"
+            )
+            return [
+                {"session_id": r[0], "model": r[1], "input_tokens": r[2], "output_tokens": r[3],
+                 "cache_hit_input": r[4], "cost": r[5]}
+                for r in cur.fetchall()
+            ]
+
     def session_cost(self, session_id: Optional[str] = None) -> float:
         sid = session_id or self._session_id
         if not sid:

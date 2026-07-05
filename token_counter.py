@@ -21,6 +21,16 @@ def _in_peak_hours() -> bool:
     return False
 
 
+def fmt_tokens(n: int) -> str:
+    if n >= 1_000_000_000:
+        return f"{n/1_000_000_000:.1f}B"
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n/1_000:.1f}K"
+    return str(n)
+
+
 @dataclass
 class UsageRecord:
     model: str = ""
@@ -84,9 +94,9 @@ class TokenCounter:
         hit_pct = (rec.cache_hit_input / rec.input_tokens * 100) if rec.input_tokens > 0 else 0
         time_tag = f" [magenta]{rec.elapsed:.1f}s[/]" if rec.elapsed else ""
         return (
-            f"  [yellow]↑[/] {rec.input_tokens} [dim]in[/] "
-            f"[dim](cache [/]{rec.cache_hit_input}/{hit_pct:.0f}%[dim])[/] "
-            f"[cyan]↓[/] {rec.output_tokens} [dim]out[/] "
+            f"  [yellow]↑[/] {fmt_tokens(rec.input_tokens)} [dim]in[/] "
+            f"[dim](cache [/]{fmt_tokens(rec.cache_hit_input)}/{hit_pct:.0f}%[dim])[/] "
+            f"[cyan]↓[/] {fmt_tokens(rec.output_tokens)} [dim]out[/] "
             f"[dim]│[/] [bold yellow]¥{rec.cost:.4f}[/]{peak_tag}{time_tag}"
         )
 
@@ -97,8 +107,8 @@ class TokenCounter:
         total_elapsed = sum(r.elapsed for r in self.records)
         time_tag = f"  [magenta]{total_elapsed:.1f}s[/]" if total_elapsed else ""
         return (
-            f"  [yellow]∑[/] {total_in} [dim]in[/] "
-            f"[cyan]↓[/] {total_out} [dim]out[/] "
-            f"[dim]cache [/]{total_cache}/{total_in-total_cache} "
+            f"  [yellow]∑[/] {fmt_tokens(total_in)} [dim]in[/] "
+            f"[cyan]↓[/] {fmt_tokens(total_out)} [dim]out[/] "
+            f"[dim]cache [/]{fmt_tokens(total_cache)}/{fmt_tokens(total_in-total_cache)} "
             f"[dim]│[/] [bold yellow]¥{self.session_cost:.4f}[/]{time_tag}"
         )

@@ -33,12 +33,39 @@ class DurationPredictor:
         c_k = input_tokens / 1000
         pred = self.w1 * nc_k + self.w2 * out_k + self.w3 * c_k + self.b
         error = elapsed - pred
-        lr = 0.005 / (1 + self.n * 0.02)
-        dw = max(-1, min(1, lr * error))
-        self.w1 += max(-0.5, min(0.5, dw * nc_k))
-        self.w2 += max(-0.5, min(0.5, dw * out_k))
-        self.w3 += max(-0.5, min(0.5, dw * c_k))
-        self.b += max(-2, min(2, dw))
+        abs_error = abs(error)
+
+        # Dead zone: 误差 < 5s → 预测够准，不动权重（这就是奖励）
+        if abs_error < 5:
+            self.n += 1
+            return
+
+        # 学习率随样本数缓慢衰减
+        lr = 0.008 / (1 + self.n * 0.005)
+
+        # 误差幅度 → 更新量映射（三段式）
+        #   5-20s:   线性 ramp      0 → lr
+        #   20-60s:  次线性增长     lr → lr*3  (sqrt)
+        #   >60s:    上限封顶       lr*4
+        excess = abs_error - 5
+        if excess < 15:
+            scale = (excess / 15) * lr
+        else:
+            scale = lr * min(4, 1 + ((excess - 15) / 15) ** 0.5)
+
+        update = scale if error > 0 else -scale
+
+        self.w1 += update * nc_k
+        self.w2 += update * out_k
+        self.w3 += update * c_k
+        self.b += update
+
+        # 权重物理合理范围钳位（不是梯度钳位，不影响误差传导）
+        self.w1 = max(-2, min(10, self.w1))
+        self.w2 = max(-2, min(10, self.w2))
+        self.w3 = max(-2, min(10, self.w3))
+        self.b = max(0.5, min(120, self.b))
+
         self.n += 1
 
     def to_dict(self) -> dict:

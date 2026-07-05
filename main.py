@@ -28,7 +28,7 @@ from rich import box
 
 from code_graph.placeholders import PlaceholderResolver
 from status_display import StatusDisplay
-from token_counter import TokenCounter
+from token_counter import TokenCounter, fmt_tokens
 from utils import LLMClient
 from cache_warmer import CacheWarmer
 from predictor import DurationPredictor
@@ -254,7 +254,7 @@ async def run_agent_loop(settings: Settings) -> None:
     ))
     _console.print(Text.assemble(
         ("  Commands: ", "dim"),
-        *[pair for cmd in ["cost", "stats", "prompts", "graph", "sessions", "resume", "save", "load", "flash", "pro", "mode", "help"]
+        *[pair for cmd in ["cost", "report", "stats", "prompts", "graph", "sessions", "resume", "save", "load", "flash", "pro", "mode", "help"]
         for pair in [(f"/{cmd}", "cyan"), (" ", "dim")]],
     ))
     _console.print("  [dim]Type /resume to continue last session, or just type a message to start fresh.[/]")
@@ -443,6 +443,45 @@ async def run_agent_loop(settings: Settings) -> None:
                     table.add_row("Model", f"[magenta]{model_mode}[/] [dim]({current_model_name})[/]")
                     _console.print(table)
 
+                elif user_input == "/report":
+                    from token_counter import FLASH_INPUT_CACHE_MISS, FLASH_OUTPUT, PRO_INPUT_CACHE_MISS, PRO_OUTPUT
+                    rows = chat_store.load_all_usage()
+                    if not rows:
+                        _console.print("  [dim]No historical data yet.[/]")
+                    else:
+                        total_in = sum(r["input_tokens"] for r in rows)
+                        total_out = sum(r["output_tokens"] for r in rows)
+                        total_cache = sum(r["cache_hit_input"] for r in rows)
+                        total_cost = sum(r["cost"] for r in rows)
+                        total_tok = total_in + total_out
+
+                        eff_price = (total_cost / total_tok * 1_000_000) if total_tok else 0
+                        flash_ref = (total_in * FLASH_INPUT_CACHE_MISS + total_out * FLASH_OUTPUT) / 1_000_000
+                        pro_ref = (total_in * PRO_INPUT_CACHE_MISS + total_out * PRO_OUTPUT) / 1_000_000
+                        flash_save = flash_ref - total_cost
+                        pro_save = pro_ref - total_cost
+                        flash_pct = (flash_save / flash_ref * 100) if flash_ref else 0
+                        pro_pct = (pro_save / pro_ref * 100) if pro_ref else 0
+
+                        table = Table(box=box.SIMPLE, header_style="bold cyan")
+                        table.add_column("Metric", style="bold")
+                        table.add_column("Value", justify="right")
+                        table.add_row("Sessions", str(len(set(r["session_id"] for r in rows))))
+                        table.add_row("API calls", str(len(rows)))
+                        table.add_row("Total tokens", fmt_tokens(total_tok))
+                        table.add_row("  input", f"{fmt_tokens(total_in)}  (cache hit {fmt_tokens(total_cache)} / {total_cache/total_in*100:.0f}%)")
+                        table.add_row("  output", fmt_tokens(total_out))
+                        table.add_row("Total cost", f"¥{total_cost:.4f}")
+                        table.add_row("", "")
+                        table.add_row("Effective ¥/1M tok", f"[bold yellow]¥{eff_price:.4f}[/]")
+                        table.add_row("", "")
+                        table.add_row("Flash reference", f"¥{flash_ref:.4f}  (would cost at ¥{FLASH_INPUT_CACHE_MISS:.1f}/M in + ¥{FLASH_OUTPUT:.1f}/M out)")
+                        table.add_row("  vs Flash saved", f"[green]¥{flash_save:.4f}  ({flash_pct:.0f}% cheaper)[/]")
+                        table.add_row("", "")
+                        table.add_row("Pro reference", f"¥{pro_ref:.4f}  (would cost at ¥{PRO_INPUT_CACHE_MISS:.1f}/M in + ¥{PRO_OUTPUT:.1f}/M out)")
+                        table.add_row("  vs Pro saved", f"[green]¥{pro_save:.4f}  ({pro_pct:.0f}% cheaper)[/]")
+                        _console.print(table)
+
                 elif user_input == "/graph":
                     _console.print(Syntax(graph.to_compact_map()[:3000], "python", word_wrap=True))
 
@@ -462,7 +501,7 @@ async def run_agent_loop(settings: Settings) -> None:
                             cur = "←" if s["id"] == chat_store.session_id else ""
                             summary = s["summary"][:60] if s["summary"] else "(no summary)"
                             cost = f"¥{s['total_cost']:.4f}" if s['total_cost'] > 0 else ""
-                            tokens = f"{int(s['total_input']/1000)}K" if s['total_input'] > 0 else ""
+                            tokens = fmt_tokens(s['total_input']) if s['total_input'] > 0 else ""
                             table.add_row(cur, s["id"], str(s["message_count"]), cost, tokens, summary)
                         _console.print(table)
 
@@ -541,6 +580,7 @@ async def run_agent_loop(settings: Settings) -> None:
                     table.add_row("/retry", "Retry last input")
                     table.add_row("/undo", "Undo last turn")
                     table.add_row("/cost", "Show session token cost")
+                    table.add_row("/report", "Show all-session cost report vs official pricing")
                     table.add_row("/stats", "Show context stats")
                     table.add_row("/prompts", "List enabled/disabled prompt fragments")
                     table.add_row("/graph", "Show project symbol map")
@@ -779,10 +819,10 @@ async def run_agent_loop(settings: Settings) -> None:
                         turn_total_cost = sum(r.cost for r in token_counter.records[turn_start_idx:])
                         _console.print(Text.assemble(
                             ("  ∑ ", "yellow"),
-                            (f"{turn_total_in} ", ""),
+                            (f"{fmt_tokens(turn_total_in)} ", ""),
                             ("in  ", "dim"),
                             ("↓ ", "cyan"),
-                            (f"{turn_total_out} ", ""),
+                            (f"{fmt_tokens(turn_total_out)} ", ""),
                             ("out  ", "dim"),
                             ("│ ", "dim"),
                             (f"¥{turn_total_cost:.4f}", "bold yellow"),
