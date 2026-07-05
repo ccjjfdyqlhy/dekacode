@@ -4,6 +4,23 @@
 
 Dekacode runs in your terminal as an AI software engineering assistant. It understands natural language instructions and autonomously performs file operations, shell commands, code analysis, and symbol navigation — all through LLM tool-calling. Every architectural decision targets **token efficiency**: minimal context, aggressive caching, speculative pre-fetching, and smart model routing.
 
+![demo](demo.png)
+
+```
+∑ 2.5M in  ↓ 19.5K out  │ ¥0.1295  │ 202.7s
+Context 5.8%  Cache 100%  Output 0.2%  │ 202.7s
+```
+
+🧮 **Cost Verification**
+
+| Item | Calculation | Value |
+|------|------------|-------|
+| Output cost | 19.5K × ¥2/1M | ¥0.039 |
+| Actual input cost | ¥0.1295 − ¥0.039 | ¥0.0905 |
+| Implied input unit price | ¥0.0905 ÷ 2.5M | **¥0.036/1M** |
+
+This proves: as long as the request is large enough (>2M tokens) and the prefix achieves 100% cache hit, DeepSeek-V4-Flash (and other cache-supporting models) enters a **"marginal cost approaches zero"** ultra-economic zone. For bulk code analysis tasks, merging them into a single large request is far more cost-effective than splitting them into multiple smaller ones.
+
 ---
 
 ## Features
@@ -185,27 +202,6 @@ User input → ContextManager (append history)
 | Duration predictor → accurate ETA | Better UX |
 
 Pricing (DeepSeek V4): Flash ¥2/1M out, Pro ¥6/1M out (peak ×2).
-
----
-
-## Demo
-
-![demo](demo.png)
-
-```
-∑ 2.5M in  ↓ 19.5K out  │ ¥0.1295  │ 202.7s
-Context 5.8%  Cache 100%  Output 0.2%  │ 202.7s
-```
-
-🧮 **Cost Verification**
-
-| Item | Calculation | Value |
-|------|------------|-------|
-| Output cost | 19.5K × ¥2/1M | ¥0.039 |
-| Actual input cost | ¥0.1295 − ¥0.039 | ¥0.0905 |
-| Implied input unit price | ¥0.0905 ÷ 2.5M | **¥0.036/1M** |
-
-This proves: as long as the request is large enough (>2M tokens) and the prefix achieves 100% cache hit, DeepSeek-V4-Flash (and other cache-supporting models) enters a **"marginal cost approaches zero"** ultra-economic zone. For bulk code analysis tasks, merging them into a single large request is far more cost-effective than splitting them into multiple smaller ones.
 
 ---
 
