@@ -5,7 +5,7 @@ import re
 import sys
 import time
 
-VERSION = "V0.2.3"
+VERSION = "V0.2.4"
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -106,6 +106,7 @@ def _setup_registry(graph=None) -> SkillRegistry:
     )
     from skills.git_ops import DiffFileSkill
     from skills.py_check import PyCheckSkill, AstSummarySkill
+    from skills.dekacode import DekaCodeSkill
 
     registry = SkillRegistry()
     registry.register(WebFetchSkill())
@@ -128,6 +129,11 @@ def _setup_registry(graph=None) -> SkillRegistry:
 
     registry.register(PyCheckSkill())
     registry.register(AstSummarySkill())
+
+    # DekaCode工具集线器: 整合core/project模块的全部代码分析能力
+    # (batch_bash, symbol_search, find_def, find_ref, diagnose, fix_imports,
+    #  diff_lines, summarize, key_files, module_map, snapshot 等)
+    registry.register(DekaCodeSkill())
 
     return registry
 
