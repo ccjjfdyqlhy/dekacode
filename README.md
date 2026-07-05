@@ -1,5 +1,7 @@
 # Dekacode V0.2.4
 
+[简体中文](https://github.com/ccjjfdyqlhy/dekacode/blob/main/README_zh.md)
+
 **Token-efficient AI coding agent for your terminal.**
 
 Dekacode runs in your terminal as an AI software engineering assistant. It understands natural language instructions and autonomously performs file operations, shell commands, code analysis, and symbol navigation — all through LLM tool-calling. Every architectural decision targets **token efficiency**: minimal context, aggressive caching, speculative pre-fetching, and smart model routing.
