@@ -91,7 +91,7 @@ def _trim_history(ctx: ContextManager) -> None:
     ctx.history = ctx.history[-keep:]
 
 
-def _setup_registry(graph=None) -> SkillRegistry:
+def _setup_registry(graph=None, settings=None) -> SkillRegistry:
     from skills.web_fetch import WebFetchSkill
     from skills.bash import BashSkill
     from skills.file_ops import (
@@ -107,6 +107,7 @@ def _setup_registry(graph=None) -> SkillRegistry:
     from skills.git_ops import DiffFileSkill
     from skills.py_check import PyCheckSkill, AstSummarySkill
     from skills.dekacode import DekaCodeSkill
+    from skills.github_ops import GitHubSkill
 
     registry = SkillRegistry()
     registry.register(WebFetchSkill())
@@ -134,6 +135,10 @@ def _setup_registry(graph=None) -> SkillRegistry:
     # (batch_bash, symbol_search, find_def, find_ref, diagnose, fix_imports,
     #  diff_lines, summarize, key_files, module_map, snapshot 等)
     registry.register(DekaCodeSkill())
+
+    token = settings.github_token if settings else ""
+    base_url = settings.github_base_url if settings else "https://api.github.com"
+    registry.register(GitHubSkill(token=token, base_url=base_url))
 
     return registry
 
@@ -202,7 +207,7 @@ async def run_agent_loop(settings: Settings) -> None:
     ))
 
     graph = _build_graph(project_root)
-    registry = _setup_registry(graph)
+    registry = _setup_registry(graph, settings)
 
     prompt_engine = PromptEngine()
     prompt_engine.load_all()
@@ -346,6 +351,7 @@ async def run_agent_loop(settings: Settings) -> None:
         "diff_file": "Diffing", "ast_summary": "Analyzing",
         "web_fetch": "Fetching", "symbol_search": "Searching", "callers": "Tracing",
         "read_symbol": "Reading", "py_check": "Checking",
+        "github": "GitHubbing",
         "_prefetch": "Prefetching", "_placeholder": "Resolving",
     }
 
@@ -678,8 +684,6 @@ async def run_agent_loop(settings: Settings) -> None:
                         )
                     assistant.tool_calls = parsed
                     ctx.draft.append(assistant)
-                    if content:
-                        _console.print(Markdown(content))
 
                     async def _exec_one(tc):
                         try:
@@ -692,7 +696,7 @@ async def run_agent_loop(settings: Settings) -> None:
                             return (tc, f"[Error] Tool crashed: {type(e).__name__}: {e}")
 
                     if len(parsed) > 1:
-                        await display.status("Batching", f"{len(parsed)} tool calls")
+                        await display.status("Batching", f"{len(parsed)} tool calls", description=content)
                     else:
                         t = parsed[0]
                         try:
@@ -709,7 +713,25 @@ async def run_agent_loop(settings: Settings) -> None:
                                 cmd = a.get("command", "")
                                 if cmd.lstrip().startswith("grep"):
                                     lbl = "Grepping"
-                            await display.status(lbl, det)
+                            elif t.function.name == "github":
+                                action = a.get("action", "")
+                                _github_labels = {
+                                    "issue_list": "Listing Issues", "issue_get": "Getting Issue",
+                                    "issue_create": "Creating Issue", "issue_update": "Updating Issue",
+                                    "issue_close": "Closing Issue", "issue_comment": "Commenting Issue",
+                                    "pr_list": "Listing PRs", "pr_get": "Getting PR",
+                                    "pr_create": "Creating PR", "pr_merge": "Merging PR",
+                                    "pr_review": "Reviewing PR", "pr_add_comment": "Commenting PR",
+                                    "pr_list_files": "Listing PR Files", "pr_get_diff": "Getting PR Diff",
+                                    "workflow_list": "Listing Workflows", "workflow_runs": "Getting Workflow Runs",
+                                    "workflow_trigger": "Triggering Workflow", "workflow_cancel": "Cancelling Workflow",
+                                    "workflow_rerun": "Rerunning Workflow", "workflow_get_run": "Getting Workflow Run",
+                                    "repo_info": "Getting Repo Info", "search_code": "Searching Code",
+                                    "search_issues": "Searching Issues", "list_branches": "Listing Branches",
+                                }
+                                lbl = _github_labels.get(action, "GitHubbing")
+                                det = action
+                            await display.status(lbl, det, description=content)
                         except json.JSONDecodeError:
                             pass
 

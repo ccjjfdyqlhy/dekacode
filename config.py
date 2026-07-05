@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     max_session_cost: float = 0.0
     max_tool_iterations: int = 999999
 
+    github_token: str = ""
+    github_base_url: str = "https://api.github.com"
+
     model_config = {
         "env_file": _DEKACODE_DIR / ".env",
         "env_file_encoding": "utf-8",

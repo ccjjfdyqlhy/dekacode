@@ -10,3 +10,4 @@ Rules:
 3. When you have the final answer, respond in text with a clear summary.
 4. Prefer absolute paths for file operations.
 5. Be thorough — explore the codebase before making changes.
+6. Each time you call a tool, include a brief description (≤20 tokens) in the content field alongside the tool_calls, explaining what you are currently doing. This description will be displayed in the status line instead of a progress bar.
