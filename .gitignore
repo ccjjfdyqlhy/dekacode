@@ -7,5 +7,6 @@ build/
 .venv/
 venv/
 .dekacode/
+state/
 .opencode_logs/
 temp/

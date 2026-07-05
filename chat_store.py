@@ -51,18 +51,7 @@ class ChatStore:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (session_id) REFERENCES sessions(id)
                 );
-                CREATE TABLE IF NOT EXISTS predictor_state (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    w1 REAL DEFAULT 0.0,
-                    w2 REAL DEFAULT 0.0,
-                    b REAL DEFAULT 0.0,
-                    n INTEGER DEFAULT 0
-                );
             """)
-            # 确保默认行存在
-            conn.execute(
-                "INSERT OR IGNORE INTO predictor_state (id, w1, w2, b, n) VALUES (1, 0.0, 0.0, 0.0, 0)"
-            )
 
     def create_session(self) -> str:
         now = datetime.now().isoformat()
@@ -207,20 +196,6 @@ class ChatStore:
                 "SELECT COALESCE(SUM(cost), 0) FROM turn_usage WHERE session_id = ?", (sid,)
             )
             return cur.fetchone()[0]
-
-    def save_predictor_state(self, w1: float, w2: float, b: float, n: int) -> None:
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute(
-                "UPDATE predictor_state SET w1=?, w2=?, b=?, n=? WHERE id=1",
-                (w1, w2, b, n),
-            )
-
-    def load_predictor_state(self) -> dict:
-        with sqlite3.connect(str(self.db_path)) as conn:
-            row = conn.execute("SELECT w1, w2, b, n FROM predictor_state WHERE id=1").fetchone()
-            if row:
-                return {"w1": row[0], "w2": row[1], "b": row[2], "n": row[3]}
-            return {"w1": 0.0, "w2": 0.0, "b": 0.0, "n": 0}
 
     def update_summary(self, summary: str) -> None:
         if not self._session_id:

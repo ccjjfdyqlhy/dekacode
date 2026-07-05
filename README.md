@@ -1,4 +1,4 @@
-# Dekacode
+# Dekacode V0.2.4
 
 **Token-efficient AI coding agent for your terminal.**
 
@@ -8,7 +8,7 @@ Dekacode runs in your terminal as an AI software engineering assistant. It under
 
 ## Features
 
-- **Tool-calling agent** — read/write files, execute bash, glob, grep, fetch URLs, search symbols, check Python syntax, diff files, and more
+- **Tool-calling agent** — 20+ built-in tools: read/write files, execute bash, glob, grep, fetch URLs, search symbols, check Python syntax, diff files, edit code, and more
 - **AST call graph** — full-project symbol index with caller/callee chain traversal; 140+ symbols indexed in ~0.01s
 - **Token-first architecture**
   - Append-only context loop + fixed prefix → maximizes DeepSeek V4 prefix cache hits (cost as low as ¥0.025/1M tokens)
@@ -16,6 +16,7 @@ Dekacode runs in your terminal as an AI software engineering assistant. It under
   - `[FETCH:Class:Name]` placeholder protocol — model requests symbol definitions on demand
   - RTK output filters: strips ANSI codes, timestamps, UUIDs from bash/grep output (reduces tool output 60–90%)
 - **Dual-model routing** — Flash (cheap) for simple tasks, Pro (powerful) for complex ones; auto-downgrade during peak hours
+- **Extended analysis toolkit** — batch execution, symbol location, code diagnosis, project summarization, dependency mapping, snapshots, incremental git analysis
 - **Rich terminal UI** — Markdown rendering, syntax highlighting, live status spinner with per-operation timing and progress bar
 - **Session persistence** — SQLite-backed conversation history with `/resume` to restore previous sessions
 - **Modular prompts** — YAML front-matter fragments (`enabled: true/false`, `order:`) for flexible system prompt composition
@@ -42,6 +43,8 @@ pip install -r requirements.txt
 cp .env.example .env   # edit with your API keys
 ```
 
+Dependencies: `pydantic>=2.0`, `pydantic-settings>=2.0`, `httpx>=0.27`, `prompt_toolkit>=3.0`, `rich>=13.0`
+
 ### Configure
 
 ```ini
@@ -49,9 +52,11 @@ PROVIDER=openai
 OPENAI_API_KEY=sk-xxx
 OPENAI_BASE_URL=https://api.deepseek.com
 
-FLASH_MODEL=deepseek-chat
-PRO_MODEL=deepseek-reasoner
+FLASH_MODEL=deepseek-v4-flash
+PRO_MODEL=deepseek-v4-pro
 ```
+
+See `.env.example` for all options (dual API keys, provider switching, session limits, etc.).
 
 ### Run
 
@@ -91,6 +96,8 @@ python /path/to/dekacode/main.py
  > Check main.py for syntax errors
  > Find all callers of handle_request
  > Add logging to UserService
+ > Summarize the changes in the last 5 commits
+ > Generate a module dependency graph
 ```
 
 ---
@@ -121,7 +128,18 @@ skills/                     Tool implementations
 ├── symbol_search.py        Symbol search, callers, read_symbol
 ├── py_check.py             Python syntax check & AST summary
 ├── web_fetch.py            URL content fetching
-└── filters.py              RTK output filters (ANSI, timestamp, UUID stripping)
+├── filters.py              RTK output filters (ANSI, timestamp, UUID stripping)
+├── dekacode.py             Hub skill — integrates core + project analysis modules
+├── core/                   Core analysis tools
+│   ├── batch.py            Batch bash & symbol search
+│   ├── cache.py            File/result caching
+│   ├── chunk.py            Semantic file chunking & smart grep
+│   ├── locator.py          find_definition, find_references, all_symbols
+│   └── diagnose.py         Error diagnosis, import issue detection
+└── project/                Project-level analysis
+    ├── incremental.py      Git diff lines, file delta, incremental change graph
+    ├── summary.py          File/project/session summarization
+    └── snapshot.py         Key file identification, module dependency map, snapshots
 
 code_graph/                 AST-based call graph
 ├── builder.py              Scans project, builds Symbol index from AST
@@ -170,7 +188,7 @@ Pricing (DeepSeek V4): Flash ¥2/1M out, Pro ¥6/1M out (peak ×2).
 
 ---
 
-## Project Structure
+## Runtime Directory
 
 ```
 .dekacode/

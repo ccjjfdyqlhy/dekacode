@@ -214,8 +214,7 @@ async def run_agent_loop(settings: Settings) -> None:
     logger = SessionLogger(log_dir=settings.log_dir)
     chat_store = ChatStore(project_root)
 
-    predictor_state = chat_store.load_predictor_state()
-    predictor = DurationPredictor.from_dict(predictor_state)
+    predictor = DurationPredictor.load()
 
     compact_map = graph.to_compact_map()
     ctx.set_prefix_attachment(f"# Project structure\n{compact_map[:2000]}")
@@ -336,8 +335,7 @@ async def run_agent_loop(settings: Settings) -> None:
                 )
         if token_counter.records:
             _console.print(token_counter.session_summary())
-        state = predictor.to_dict()
-        chat_store.save_predictor_state(**state)
+        predictor.save()
         logger.close()
         _console.print(f"  [dim]log: {logger.path}[/]")
 
@@ -591,6 +589,9 @@ async def run_agent_loop(settings: Settings) -> None:
                 est_out = prev_rec.output_tokens if prev_rec else 1024
                 req_size = sum(len(m.content or "") for m in request)
                 est_dur = predictor.predict(req_size, est_cache, est_out)
+                # 每次迭代都用当前上下文规模更新预估：
+                # 工具调用 → 上下文增长 → c_k(total_input/1000) 增大 → est_dur 增大
+                _turn_estimated = max(_turn_estimated, _turn_elapsed + est_dur * 2)
                 try:
                     await display.status("Thinking", turn_estimated=_turn_estimated)
                     t0 = time.time()
@@ -638,6 +639,7 @@ async def run_agent_loop(settings: Settings) -> None:
                 display.token(usage_text)
                 logger.log_response(response, elapsed, usage_text)
                 predictor.add(rec.input_tokens, rec.cache_hit_input, rec.output_tokens, elapsed)
+                predictor.save()
 
                 if settings.max_session_cost > 0 and token_counter.session_cost > settings.max_session_cost:
                     await display.end()
