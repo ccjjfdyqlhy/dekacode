@@ -11,17 +11,14 @@ class WebFetchSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Fetch and return the text content from a URL"
+        return "Fetch URL content"
 
     @property
     def parameters(self) -> dict:
         return {
         "type": "object",
         "properties": {
-            "url": {
-                "type": "string",
-                "description": "The URL to fetch content from",
-            },
+            "url": {"type": "string"},
         },
         "required": ["url"],
     }

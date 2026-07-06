@@ -29,17 +29,14 @@ class ReadFileSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Read the contents of a file (supports line range: file.py:10-30)"
+        return "Read file (line range: file.py:10-30)"
 
     @property
     def parameters(self) -> dict:
         return {
         "type": "object",
         "properties": {
-            "file_path": {
-                "type": "string",
-                "description": "File path, optionally with line range (e.g. main.py:10-30)",
-            },
+            "file_path": {"type": "string"},
         },
         "required": ["file_path"],
     }
@@ -57,15 +54,14 @@ class ReadFileSkill(Skill):
                 selected = lines[s:e]
                 content = "".join(selected)
                 total = len(content)
-                prefix = f"# {path} lines {s+1}-{e} ({total_lines} total)\n"
-                content = prefix + content
+                content = f"# {path}:{s+1}-{e}\n{content}"
             else:
                 content = "".join(lines)
                 total = len(content)
-                content = f"# {path} ({total_lines} lines, {total} chars)\n" + content
+                content = f"# {path} ({total_lines}L)\n{content}"
 
             if total > 30000:
-                content = content[:30000] + f"\n\n[...{total} chars total, truncated to 30000]"
+                content = content[:30000] + f"\n[...+{total-30000}c]"
             return SkillResult(success=True, output=content)
         except Exception as e:
             return SkillResult(success=False, output=str(e))
@@ -78,21 +74,15 @@ class WriteFileSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Write content to a file (overwrites existing content)"
+        return "Write file (overwrite)"
 
     @property
     def parameters(self) -> dict:
         return {
         "type": "object",
         "properties": {
-            "file_path": {
-                "type": "string",
-                "description": "Absolute path to the file to write",
-            },
-            "content": {
-                "type": "string",
-                "description": "The content to write to the file",
-            },
+            "file_path": {"type": "string"},
+            "content": {"type": "string"},
         },
         "required": ["file_path", "content"],
     }
@@ -114,17 +104,14 @@ class GlobSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Find files matching a glob pattern"
+        return "Find files by glob"
 
     @property
     def parameters(self) -> dict:
         return {
         "type": "object",
         "properties": {
-            "pattern": {
-                "type": "string",
-                "description": "Glob pattern to match (e.g. '**/*.py')",
-            },
+            "pattern": {"type": "string"},
         },
         "required": ["pattern"],
     }
@@ -150,25 +137,16 @@ class GrepSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Search file contents using a regular expression"
+        return "Regex search file contents"
 
     @property
     def parameters(self) -> dict:
         return {
         "type": "object",
         "properties": {
-            "pattern": {
-                "type": "string",
-                "description": "Regular expression pattern to search for",
-            },
-            "include": {
-                "type": "string",
-                "description": "Glob pattern to filter files (e.g. '*.py')",
-            },
-            "path": {
-                "type": "string",
-                "description": "Root directory to search (default: current directory)",
-            },
+            "pattern": {"type": "string"},
+            "include": {"type": "string"},
+            "path": {"type": "string"},
         },
         "required": ["pattern"],
     }
@@ -221,25 +199,16 @@ class EditFileSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Edit a file by replacing an exact text segment (search-and-replace). Uses far fewer tokens than read+write for small changes."
+        return "Edit file via search-and-replace"
 
     @property
     def parameters(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Absolute path to the file to edit",
-                },
-                "old_string": {
-                    "type": "string",
-                    "description": "The exact text to search for (must match exactly one occurrence)",
-                },
-                "new_string": {
-                    "type": "string",
-                    "description": "The replacement text",
-                },
+                "file_path": {"type": "string"},
+                "old_string": {"type": "string"},
+                "new_string": {"type": "string"},
             },
             "required": ["file_path", "old_string", "new_string"],
         }
@@ -270,7 +239,7 @@ class ReadFilesSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Read multiple files at once (saves tokens vs multiple read_file calls)"
+        return "Read multiple files at once"
 
     @property
     def parameters(self) -> dict:
@@ -280,7 +249,6 @@ class ReadFilesSkill(Skill):
                 "paths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of file paths to read",
                 },
             },
             "required": ["paths"],
@@ -311,29 +279,17 @@ class GrepContextSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Search file contents with surrounding context lines (saves tokens vs grep + read_file)"
+        return "Grep with context lines"
 
     @property
     def parameters(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Regular expression pattern to search for",
-                },
-                "include": {
-                    "type": "string",
-                    "description": "Glob pattern to filter files (e.g. '*.py')",
-                },
-                "path": {
-                    "type": "string",
-                    "description": "Root directory to search (default: current directory)",
-                },
-                "context": {
-                    "type": "integer",
-                    "description": "Number of context lines before and after each match (default: 3)",
-                },
+                "pattern": {"type": "string"},
+                "include": {"type": "string"},
+                "path": {"type": "string"},
+                "context": {"type": "integer"},
             },
             "required": ["pattern"],
         }
@@ -387,25 +343,16 @@ class ListDirSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "List project directory structure as a tree (up to given depth)"
+        return "List dir tree"
 
     @property
     def parameters(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Root directory (default: current directory)",
-                },
-                "depth": {
-                    "type": "integer",
-                    "description": "Maximum depth of directory tree (default: 3)",
-                },
-                "include": {
-                    "type": "string",
-                    "description": "Glob pattern to filter files (e.g. '*.py')",
-                },
+                "path": {"type": "string"},
+                "depth": {"type": "integer"},
+                "include": {"type": "string"},
             },
         }
 

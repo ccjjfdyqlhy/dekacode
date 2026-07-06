@@ -12,7 +12,7 @@ class PyCheckSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Check Python files for syntax errors using AST parsing"
+        return "Check Python syntax via AST"
 
     @property
     def parameters(self) -> dict:
@@ -22,7 +22,6 @@ class PyCheckSkill(Skill):
                 "files": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of file paths to check (e.g. ['main.py', 'utils.py'])",
                 },
             },
             "required": ["files"],
@@ -72,17 +71,14 @@ class AstSummarySkill(Skill):
 
     @property
     def description(self) -> str:
-        return "List class/function definitions in a Python file (line numbers only, no body). Uses far fewer tokens than read_file."
+        return "List class/func defs (line nums, no body)"
 
     @property
     def parameters(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Path to the Python file to analyze",
-                },
+                "file_path": {"type": "string"},
             },
             "required": ["file_path"],
         }

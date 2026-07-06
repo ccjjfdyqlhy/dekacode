@@ -12,17 +12,14 @@ class SymbolSearchSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Search for symbols (classes, functions) by name across the project"
+        return "Search symbols by name across project"
 
     @property
     def parameters(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Symbol name or partial name to search for",
-                },
+                "query": {"type": "string"},
             },
             "required": ["query"],
         }
@@ -47,21 +44,15 @@ class CallersSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Find all functions that call a given symbol"
+        return "Find callers of a symbol"
 
     @property
     def parameters(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "symbol": {
-                    "type": "string",
-                    "description": "Exact symbol name (e.g. 'handle_request' or 'ClassName.method_name')",
-                },
-                "depth": {
-                    "type": "integer",
-                    "description": "How many levels up the call chain to traverse (default: 2)",
-                },
+                "symbol": {"type": "string"},
+                "depth": {"type": "integer"},
             },
             "required": ["symbol"],
         }
@@ -82,17 +73,14 @@ class ReadSymbolSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Read the source code of a specific symbol (class/function) by name, without reading the entire file"
+        return "Read symbol source by name"
 
     @property
     def parameters(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "symbol": {
-                    "type": "string",
-                    "description": "Exact symbol name (e.g. 'ContextManager' or 'ContextManager.build_request')",
-                },
+                "symbol": {"type": "string"},
             },
             "required": ["symbol"],
         }

@@ -11,21 +11,15 @@ class BashSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Execute a bash command on the system"
+        return "Run bash command"
 
     @property
     def parameters(self) -> dict:
         return {
         "type": "object",
         "properties": {
-            "command": {
-                "type": "string",
-                "description": "The bash command to execute",
-            },
-            "workdir": {
-                "type": "string",
-                "description": "Working directory for the command (optional)",
-            },
+            "command": {"type": "string"},
+            "workdir": {"type": "string"},
         },
         "required": ["command"],
     }

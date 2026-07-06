@@ -131,4 +131,23 @@ class LLMClient:
 
         raise last_error or RuntimeError("API request failed after all retries")
 
+    async def query_balance(self) -> dict | None:
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(self.base_url)
+            domain = f"{parsed.scheme}://{parsed.netloc}"
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{domain}/user/balance",
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            pass
+        return None
+
 

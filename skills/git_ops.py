@@ -11,21 +11,15 @@ class DiffFileSkill(Skill):
 
     @property
     def description(self) -> str:
-        return "Show uncommitted git diff for a file or the whole repo"
+        return "Show git diff (unstaged or staged)"
 
     @property
     def parameters(self) -> dict:
         return {
             "type": "object",
             "properties": {
-                "file_path": {
-                    "type": "string",
-                    "description": "Optional file path to show diff for (omit for full repo diff)",
-                },
-                "staged": {
-                    "type": "boolean",
-                    "description": "Show staged changes (default: show unstaged)",
-                },
+                "file_path": {"type": "string"},
+                "staged": {"type": "boolean"},
             },
         }
 

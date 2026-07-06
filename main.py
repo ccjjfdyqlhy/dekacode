@@ -83,13 +83,41 @@ def _get_tool_detail(name: str, args: dict) -> str:
     return ""
 
 
-def _trim_history(ctx: ContextManager) -> None:
+def _compact_history(ctx: ContextManager) -> None:
     total = len(ctx.history)
     if total <= MAX_CONVERSATION_HISTORY:
         return
-    keep = MAX_CONVERSATION_HISTORY
-    ctx.history = ctx.history[-keep:]
+    keep_first = 3
+    keep_last = MAX_CONVERSATION_HISTORY - keep_first - 1
+    if keep_last < 1:
+        ctx.history = ctx.history[-MAX_CONVERSATION_HISTORY:]
+        return
+    compressed = Message(role="system", content="[Earlier history compressed — scrollback preserved above]")
+    ctx.history = ctx.history[:keep_first] + [compressed] + ctx.history[-(keep_last):]
 
+
+_ESSENTIAL_TOOLS = {"read_file", "write_file", "edit_file", "read_files", "bash", "glob", "grep", "grep_context", "list_dir", "dekacode"}
+_SYMBOL_TOOLS = {"symbol_search", "callers", "read_symbol"}
+_CHECK_TOOLS = {"py_check", "ast_summary"}
+_GIT_TOOLS = {"diff_file"}
+_WEB_TOOLS = {"web_fetch"}
+_GITHUB_TOOLS = {"github"}
+
+_TOOL_KEYWORDS: list[tuple[set[str], set[str]]] = [
+    (_SYMBOL_TOOLS, {"symbol", "function", "class", "caller", "callee", "define", "refer"}),
+    (_CHECK_TOOLS, {"syntax", "check", "parse", "ast", "compile"}),
+    (_GIT_TOOLS, {"git", "diff", "commit", "staged", "unstaged"}),
+    (_WEB_TOOLS, {"url", "http", "fetch", "web", "api"}),
+    (_GITHUB_TOOLS, {"github", "issue", "pull", "pr", "workflow"}),
+]
+
+def _filter_tool_defs(registry: SkillRegistry, user_input: str) -> list:
+    active: set[str] = set(_ESSENTIAL_TOOLS)
+    user_lower = user_input.lower()
+    for tools, keywords in _TOOL_KEYWORDS:
+        if any(kw in user_lower for kw in keywords):
+            active.update(tools)
+    return [td for td in registry.get_tool_definitions() if td.function["name"] in active]
 
 def _setup_registry(graph=None, settings=None) -> SkillRegistry:
     from skills.web_fetch import WebFetchSkill
@@ -143,6 +171,8 @@ def _setup_registry(graph=None, settings=None) -> SkillRegistry:
     return registry
 
 
+_IMPORTED_FILES: set[str] = set()
+
 def _attach_imports(ctx: ContextManager, user_input: str) -> None:
     from code_graph.imports import ImportResolver
     from models import Message
@@ -152,6 +182,9 @@ def _attach_imports(ctx: ContextManager, user_input: str) -> None:
     resolver = ImportResolver(".")
     blocks: list[str] = []
     for fpath in set(matches):
+        if fpath in _IMPORTED_FILES:
+            continue
+        _IMPORTED_FILES.add(fpath)
         sigs = resolver.resolve(fpath)
         if sigs:
             lines = "\n".join(s.to_prompt_block() for s in sigs)
@@ -222,7 +255,7 @@ async def run_agent_loop(settings: Settings) -> None:
     predictor = DurationPredictor.load()
 
     compact_map = graph.to_compact_map()
-    ctx.set_prefix_attachment(f"# Project structure\n{compact_map[:2000]}")
+    ctx.set_prefix_attachment(f"# Project structure\n{compact_map[:800]}")
     _prefix_stable_len = 1 + len(ctx.prefix)  # system + prefix（不包含 history/draft）
     _prefix_hash = hash(str(ctx.build_request()[:_prefix_stable_len]))
     _console.print(f"  [dim]prefix hash: {_prefix_hash}[/]")
@@ -599,12 +632,14 @@ async def run_agent_loop(settings: Settings) -> None:
 
                 continue
 
+            _balance_before = await client.query_balance()
+
             _history_snapshots.append(len(ctx.history))
             _last_user_input = user_input
 
             if not chat_store.session_id:
                 chat_store.create_session()
-            _trim_history(ctx)
+            _compact_history(ctx)
             _last_saved_len = min(_last_saved_len, len(ctx.history))
             _attach_imports(ctx, user_input)
             ctx.add_user_message(user_input)
@@ -626,9 +661,9 @@ async def run_agent_loop(settings: Settings) -> None:
                     if cur_hash != _prefix_hash:
                         _console.print(f"  [red]⚠ Prefix hash changed: {_prefix_hash} -> {cur_hash} (cache lost!)[/]")
                         _prefix_hash = cur_hash
-                tools = registry.get_tool_definitions()
+                tools = _filter_tool_defs(registry, user_input) if turn == 0 else registry.get_tool_definitions()
                 request = ctx.build_request()
-                output_limit = 8192
+                output_limit = 16384
                 logger.log_request(request, tools, model_mode, output_limit)
                 prev_rec = token_counter.records[-1] if token_counter.records else None
                 est_cache = prev_rec.cache_hit_input if prev_rec else 0
@@ -861,6 +896,24 @@ async def run_agent_loop(settings: Settings) -> None:
             summary_cost = sum(r.cost for r in turn_records)
             _last_turn_elapsed = _turn_elapsed
             _turn_number += 1
+
+            _balance_after = await client.query_balance()
+            if _balance_before and _balance_after:
+                try:
+                    bf = float(_balance_before["balance_infos"][0]["total_balance"])
+                    af = float(_balance_after["balance_infos"][0]["total_balance"])
+                    real_cost = bf - af
+                    _console.print(Text.assemble(
+                        ("  Real: ", "bold yellow"),
+                        (f"¥{real_cost:.4f}  ", "bold yellow"),
+                        ("(balance: ", "dim"),
+                        (f"¥{bf:.2f}", "green"),
+                        (" → ", "dim"),
+                        (f"¥{af:.2f}", "cyan"),
+                        (")", "dim"),
+                    ))
+                except (KeyError, IndexError, ValueError, TypeError):
+                    pass
 
             unsaved = ctx.history[_last_saved_len:]
             if unsaved:
