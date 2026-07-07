@@ -32,6 +32,7 @@ from token_counter import TokenCounter, fmt_tokens
 from utils import LLMClient
 from cache_warmer import CacheWarmer
 from predictor import DurationPredictor
+from memory import MemoryStore
 
 _FILE_REF_RE = re.compile(r"([\w./\\-]+\.py)")
 
@@ -259,13 +260,22 @@ async def run_agent_loop(settings: Settings) -> None:
     prefetcher = SpeculativePrefetcher(graph)
     logger = SessionLogger(log_dir=settings.log_dir)
     chat_store = ChatStore(project_root)
+    memory_store = MemoryStore(settings, debug_print=_console.print)
+    if memory_store.enabled:
+        _console.print(Text.assemble(
+            ("  Mnemosyne ", "bold blue"),
+            (f"@{memory_store.bank}", "cyan"),
+            ("  ", "dim"),
+            (f"{memory_store.embedding_model}", "dim"),
+        ))
+    elif settings.mnemosyne_enabled and memory_store._init_error:
+        pass  # error already printed by MemoryStore._init
 
     predictor = DurationPredictor.load()
 
     compact_map = graph.to_compact_map()
     ctx.set_prefix_attachment(f"# Project structure\n{compact_map[:800]}")
-    _prefix_stable_len = 1 + len(ctx.prefix)  # system + prefix（不包含 history/draft）
-    _prefix_hash = hash(str(ctx.build_request()[:_prefix_stable_len]))
+    _prefix_hash = hash(str(ctx.get_stable_prefix()))
     _console.print(f"  [dim]prefix hash: {_prefix_hash}[/]")
 
     from router import ModelConfig
@@ -287,7 +297,7 @@ async def run_agent_loop(settings: Settings) -> None:
     turn_start_idx = 0
 
     _console.print(Text.assemble(
-        ("  Code Agent ready", "bold green"),
+        ("  Deka ready", "bold green"),
         ("  provider=", "dim"), (settings.provider, "yellow"),
         ("  model=", "dim"), (current_model_name, "cyan"),
         ("  mode=", "dim"), (model_mode, "magenta"),
@@ -295,7 +305,7 @@ async def run_agent_loop(settings: Settings) -> None:
     ))
     _console.print(Text.assemble(
         ("  Commands: ", "dim"),
-        *[pair for cmd in ["cost", "report", "stats", "prompts", "graph", "sessions", "resume", "save", "load", "flash", "pro", "mode", "nocompress", "help"]
+        *[pair for cmd in ["cost", "report", "stats", "prompts", "graph", "sessions", "resume", "save", "load", "flash", "pro", "mode", "memory", "nocompress", "help"]
         for pair in [(f"/{cmd}", "cyan"), (" ", "dim")]],
     ))
     _console.print("  [dim]Type /resume to continue last session, or just type a message to start fresh.[/]")
@@ -598,6 +608,21 @@ async def run_agent_loop(settings: Settings) -> None:
                         ("peak", "red") if peak else ("ok", "green"),
                     ))
 
+                elif user_input == "/memory":
+                    if not memory_store.enabled:
+                        if settings.mnemosyne_enabled and memory_store._init_error:
+                            _console.print(f"  [yellow]⚠ {memory_store._init_error}[/]")
+                        else:
+                            _console.print("  [dim]Mnemosyne memory: not enabled (set MNEMOSYNE_ENABLED=true)[/]")
+                    else:
+                        table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+                        table.add_column("Key", style="bold", no_wrap=True)
+                        table.add_column("Value")
+                        table.add_row("Status", "[green]enabled[/]")
+                        table.add_row("Bank", f"[cyan]{memory_store.bank}[/]")
+                        table.add_row("Embedding", f"[dim]{memory_store.embedding_model}[/]")
+                        _console.print(table)
+
                 elif user_input == "/nocompress":
                     if chat_store.session_id:
                         current = chat_store.get_no_compress()
@@ -664,6 +689,7 @@ async def run_agent_loop(settings: Settings) -> None:
                     table.add_row("/flash", "Switch to flash model (cheap)")
                     table.add_row("/pro", "Switch to pro model (powerful)")
                     table.add_row("/mode", "Auto model selection")
+                    table.add_row("/memory", "Show Mnemosyne memory status")
                     table.add_row("/nocompress", "Toggle no-compress mode for this session")
                     table.add_row("/exit", "Exit")
                     _console.print(table)
@@ -683,6 +709,11 @@ async def run_agent_loop(settings: Settings) -> None:
             _loaded_history_len = _compact_history(ctx, _loaded_history_len, chat_store)
             _last_saved_len = min(_last_saved_len, len(ctx.history))
             _attach_imports(ctx, user_input)
+            if memory_store.enabled:
+                mem_texts, mem_block = memory_store.recall_and_format(user_input)
+                ctx.attach_memory(mem_block)
+                if mem_texts:
+                    _console.print(f"  [dim]Memory: {len(mem_texts)} recall(s) injected[/]")
             ctx.add_user_message(user_input)
             _turn_elapsed = 0.0
             _turn_estimated = _last_turn_elapsed or 60.0
@@ -698,7 +729,7 @@ async def run_agent_loop(settings: Settings) -> None:
             while turn < settings.max_tool_iterations:
                 _rebuild_graph_if_dirty()
                 if turn == 0:
-                    cur_hash = hash(str(ctx.build_request()[:_prefix_stable_len]))
+                    cur_hash = hash(str(ctx.get_stable_prefix()))
                     if cur_hash != _prefix_hash:
                         _console.print(f"  [red]⚠ Prefix hash changed: {_prefix_hash} -> {cur_hash} (cache lost!)[/]")
                         _prefix_hash = cur_hash
@@ -1021,6 +1052,30 @@ async def run_agent_loop(settings: Settings) -> None:
                 "cost": summary_cost,
                 "elapsed": round(_turn_elapsed, 1),
             })
+
+            if memory_store.enabled and _last_user_input and not _last_user_input.startswith("/"):
+                _turn_start = _history_snapshots[-1] if _history_snapshots else 0
+                _resp = ""
+                for _m in reversed(ctx.history[_turn_start:]):
+                    if _m.role == "assistant" and _m.content:
+                        _resp = _m.content[:500]
+                        break
+                if _resp:
+                    _tool_summary = ""
+                    for _m in ctx.history[_turn_start:]:
+                        if _m.role == "tool" and _m.name and _m.content:
+                            _lines = _m.content.strip().split("\n")
+                            _preview = _lines[0][:80]
+                            _tool_summary += f"\n  [{_m.name}] {_preview}"
+                    _detail = f"User: {_last_user_input[:200]}\nResponse: {_resp[:300]}"
+                    if _tool_summary:
+                        _detail += f"\nTools:{_tool_summary}"
+                    memory_store.remember(
+                        _detail,
+                        importance=0.4
+                    )
+                    _console.print(f"  [dim]Memory: stored[/]")
+
             warmer.set_context(ctx, model_mode)
 
     except BaseException:

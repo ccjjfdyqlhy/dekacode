@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     github_token: str = ""
     github_base_url: str = "https://api.github.com"
 
+    mnemosyne_enabled: bool = True
+    mnemosyne_bank: str = "dekacode"
+    mnemosyne_embedding_model: str = "BAAI/bge-small-en-v1.5"
+    mnemosyne_data_dir: str = ""
+
     model_config = {
         "env_file": _DEKACODE_DIR / ".env",
         "env_file_encoding": "utf-8",

@@ -61,10 +61,20 @@ class ContextManager:
         self.prefix: list[Message] = []
         self.history: list[Message] = []
         self.draft: list[Message] = []
+        self._memory_attachment: Message | None = None
 
     def build_request(self) -> list[Message]:
-        msgs = [self._system] + self.prefix + self.history + self.draft
+        msgs = [self._system]
+        if self._memory_attachment:
+            msgs.append(self._memory_attachment)
+        msgs += self.prefix + self.history + self.draft
         return self._sanitize_tool_order(msgs)
+
+    def get_stable_prefix(self) -> list[Message]:
+        return [self._system] + self.prefix
+
+    def attach_memory(self, content: str) -> None:
+        self._memory_attachment = Message(role="system", content=content) if content else None
 
     @staticmethod
     def _sanitize_tool_order(msgs: list[Message]) -> list[Message]:
