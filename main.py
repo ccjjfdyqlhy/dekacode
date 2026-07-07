@@ -678,12 +678,21 @@ async def run_agent_loop(settings: Settings) -> None:
                     t0 = time.time()
                     response = await client.chat(request, tools, model_mode=model_mode, max_tokens=output_limit)
                     elapsed = time.time() - t0
+                except KeyboardInterrupt:
+                    await display.end()
+                    ctx.rollback_draft()
+                    _console.print("  [yellow]⏹ Interrupted[/]")
+                    break
+                except asyncio.CancelledError:
+                    ctx.rollback_draft()
+                    break
                 except Exception as e:
                     error_text = str(e)
                     ctx.rollback_draft()
                     if "tool" in error_text and "tool_calls" in error_text:
                         retries = 10
                         ok = False
+                        interrupted_retry = False
                         for attempt in range(retries):
                             _console.print(f"  [yellow]⟳ Tool role mismatch, retry {attempt+1}/{retries}...[/]")
                             try:
@@ -693,12 +702,21 @@ async def run_agent_loop(settings: Settings) -> None:
                                 elapsed = time.time() - t0
                                 ok = True
                                 break
+                            except KeyboardInterrupt:
+                                await display.end()
+                                ctx.rollback_draft()
+                                _console.print("  [yellow]⏹ Interrupted[/]")
+                                interrupted_retry = True
+                                break
                             except Exception as e2:
                                 error_text = str(e2)
                                 ctx.rollback_draft()
                         if not ok:
                             await display.end()
-                            _console.print(f"  [red]✗ API Error (retry failed after {retries} attempts):[/] {error_text}")
+                            if interrupted_retry:
+                                _console.print("  [yellow]⏹ Interrupted[/]")
+                            else:
+                                _console.print(f"  [red]✗ API Error (retry failed after {retries} attempts):[/] {error_text}")
                             break
                     else:
                         await display.end()
@@ -810,7 +828,13 @@ async def run_agent_loop(settings: Settings) -> None:
                         except json.JSONDecodeError:
                             pass
 
-                    tool_results = await asyncio.gather(*[_exec_one(tc) for tc in parsed])
+                    try:
+                        tool_results = await asyncio.gather(*[_exec_one(tc) for tc in parsed])
+                    except KeyboardInterrupt:
+                        await display.end()
+                        ctx.rollback_draft()
+                        _console.print("  [yellow]⏹ Interrupted during tool execution[/]")
+                        break
 
                     for tc, result_text in tool_results:
                         if tc.function.name == "bash":
@@ -838,7 +862,12 @@ async def run_agent_loop(settings: Settings) -> None:
                                 if cleaned:
                                     assistant.content = cleaned
                                 await display.status("Resolving")
-                                fetched = resolver.fetch(symbols)
+                                try:
+                                    fetched = resolver.fetch(symbols)
+                                except KeyboardInterrupt:
+                                    await display.end()
+                                    _console.print("  [yellow]⏹ Interrupted[/]")
+                                    break
                                 if fetched:
                                     _console.print(Text.assemble(("  ⌘ Resolved ", "cyan"), (f"{len(symbols)} placeholders", "dim")))
                                     ctx.add_assistant_message(assistant)
