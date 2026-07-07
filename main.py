@@ -35,7 +35,7 @@ from predictor import DurationPredictor
 
 _FILE_REF_RE = re.compile(r"([\w./\\-]+\.py)")
 
-MAX_CONVERSATION_HISTORY = 40
+MAX_CONVERSATION_HISTORY = 1000
 
 
 def _get_tool_detail(name: str, args: dict) -> str:
@@ -83,17 +83,25 @@ def _get_tool_detail(name: str, args: dict) -> str:
     return ""
 
 
-def _compact_history(ctx: ContextManager) -> None:
+def _compact_history(ctx: ContextManager, loaded_len: int = 0, chat_store=None) -> int:
+    if chat_store and chat_store.get_no_compress():
+        return loaded_len
     total = len(ctx.history)
     if total <= MAX_CONVERSATION_HISTORY:
-        return
-    keep_first = 3
-    keep_last = MAX_CONVERSATION_HISTORY - keep_first - 1
+        return loaded_len
+    if loaded_len > 0 and total <= loaded_len + 20:
+        return loaded_len
+    keep_first = 10
+    keep_last = min(200, MAX_CONVERSATION_HISTORY - keep_first - 1)
     if keep_last < 1:
         ctx.history = ctx.history[-MAX_CONVERSATION_HISTORY:]
-        return
+        return 0
+    removed = ctx.history[keep_first:-keep_last]
+    if chat_store and chat_store.session_id and removed:
+        chat_store.save_compressed_chunk(removed)
     compressed = Message(role="system", content="[Earlier history compressed — scrollback preserved above]")
     ctx.history = ctx.history[:keep_first] + [compressed] + ctx.history[-(keep_last):]
+    return 0
 
 
 _ESSENTIAL_TOOLS = {"read_file", "write_file", "edit_file", "read_files", "bash", "glob", "grep", "grep_context", "list_dir", "dekacode"}
@@ -287,7 +295,7 @@ async def run_agent_loop(settings: Settings) -> None:
     ))
     _console.print(Text.assemble(
         ("  Commands: ", "dim"),
-        *[pair for cmd in ["cost", "report", "stats", "prompts", "graph", "sessions", "resume", "save", "load", "flash", "pro", "mode", "help"]
+        *[pair for cmd in ["cost", "report", "stats", "prompts", "graph", "sessions", "resume", "save", "load", "flash", "pro", "mode", "nocompress", "help"]
         for pair in [(f"/{cmd}", "cyan"), (" ", "dim")]],
     ))
     _console.print("  [dim]Type /resume to continue last session, or just type a message to start fresh.[/]")
@@ -322,6 +330,7 @@ async def run_agent_loop(settings: Settings) -> None:
 
     _clean_exit = False
     _turn_number = 0
+    _loaded_history_len = 0
     _last_saved_len = 0
     _last_user_input = ""
     _history_snapshots: list[int] = []
@@ -399,22 +408,25 @@ async def run_agent_loop(settings: Settings) -> None:
                 _console.print(f"  [dim]▸ {label}[/]")
 
     def _load_session(sid: str) -> bool:
-        nonlocal _last_saved_len
+        nonlocal _last_saved_len, _loaded_history_len
         hist = chat_store.load_messages(sid)
         if not hist:
             return False
         chat_store.set_session(sid)
         ctx.history = hist
+        _loaded_history_len = len(hist)
         _last_saved_len = len(hist)
         usage = chat_store.load_usage(sid)
         total_cost = sum(u["cost"] for u in usage)
         total_in = sum(u["input_tokens"] for u in usage)
+        no_compress_flag = " NOCOMPRESS" if chat_store.get_no_compress(sid) else ""
         _console.print(Text.assemble(
             ("  Loaded ", "green"),
             (sid, "cyan"),
             (f"  {len(hist)} msgs", "yellow"),
             (f"  ¥{total_cost:.4f}", "bold yellow"),
             (f"  {int(total_in/1000)}K in", "cyan"),
+            (no_compress_flag, "bold green") if no_compress_flag else ("", ""),
         ))
         _render_hist(hist)
         return True
@@ -586,6 +598,34 @@ async def run_agent_loop(settings: Settings) -> None:
                         ("peak", "red") if peak else ("ok", "green"),
                     ))
 
+                elif user_input == "/nocompress":
+                    if chat_store.session_id:
+                        current = chat_store.get_no_compress()
+                        chat_store.set_no_compress(not current)
+                        status = "ON" if not current else "OFF"
+                        if current:  # was ON, turning OFF
+                            pass
+                        else:  # was OFF, turning ON — restore compressed chunks
+                            chunks = chat_store.load_compressed_chunks()
+                            if chunks:
+                                new_hist = []
+                                for m in ctx.history:
+                                    if m.role == "system" and m.content == "[Earlier history compressed — scrollback preserved above]":
+                                        for chunk in chunks:
+                                            new_hist.extend(chunk)
+                                    else:
+                                        new_hist.append(m)
+                                ctx.history = new_hist
+                                _loaded_history_len = len(ctx.history)
+                                chat_store.clear_compressed_chunks()
+                                _console.print(f"  [dim]Restored {len(chunks)} compressed chunk(s) ({sum(len(c) for c in chunks)} msgs)[/]")
+                        _console.print(Text.assemble(
+                            ("  No-compress: ", "bold"),
+                            (status, "green" if not current else "dim"),
+                        ))
+                    else:
+                        _console.print("  [dim]No active session.[/]")
+
                 elif user_input == "/prompts":
                     table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
                     table.add_column("", style="green")
@@ -624,6 +664,7 @@ async def run_agent_loop(settings: Settings) -> None:
                     table.add_row("/flash", "Switch to flash model (cheap)")
                     table.add_row("/pro", "Switch to pro model (powerful)")
                     table.add_row("/mode", "Auto model selection")
+                    table.add_row("/nocompress", "Toggle no-compress mode for this session")
                     table.add_row("/exit", "Exit")
                     _console.print(table)
 
@@ -639,7 +680,7 @@ async def run_agent_loop(settings: Settings) -> None:
 
             if not chat_store.session_id:
                 chat_store.create_session()
-            _compact_history(ctx)
+            _loaded_history_len = _compact_history(ctx, _loaded_history_len, chat_store)
             _last_saved_len = min(_last_saved_len, len(ctx.history))
             _attach_imports(ctx, user_input)
             ctx.add_user_message(user_input)
@@ -673,6 +714,8 @@ async def run_agent_loop(settings: Settings) -> None:
                 # 每次迭代都用当前上下文规模更新预估：
                 # 工具调用 → 上下文增长 → c_k(total_input/1000) 增大 → est_dur 增大
                 _turn_estimated = max(_turn_estimated, _turn_elapsed + est_dur * 2)
+                if chat_store and chat_store.get_no_compress() and req_size > 150000:
+                    _console.print("  [yellow]⚠ Large context (no-compress ON) — may exceed model limit. Type /nocompress to disable.[/]")
                 try:
                     await display.status("Thinking", turn_estimated=_turn_estimated)
                     t0 = time.time()
@@ -689,6 +732,17 @@ async def run_agent_loop(settings: Settings) -> None:
                 except Exception as e:
                     error_text = str(e)
                     ctx.rollback_draft()
+                    _is_too_long = any(kw in error_text.lower() for kw in ("prompt 超长", "context length", "too large", "maximum context", "token limit", "1261"))
+                    if _is_too_long:
+                        await display.end()
+                        _console.print("  [red]✗ Context too long for model[/]")
+                        if chat_store and chat_store.get_no_compress():
+                            chat_store.set_no_compress(False)
+                            _loaded_history_len = 0
+                            _console.print("  [yellow]  Auto-disabled no-compress. Type /retry to continue with compressed context.[/]")
+                        else:
+                            _console.print("  [yellow]  Reduce context size or use a model with larger window.[/]")
+                        break
                     if "tool" in error_text and "tool_calls" in error_text:
                         retries = 10
                         ok = False

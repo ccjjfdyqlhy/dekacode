@@ -52,6 +52,26 @@ class ChatStore:
                     FOREIGN KEY (session_id) REFERENCES sessions(id)
                 );
             """)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn) -> None:
+        migs = [
+            "ALTER TABLE sessions ADD COLUMN no_compress INTEGER DEFAULT 0",
+            "CREATE TABLE IF NOT EXISTS compressed_chunks ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "session_id TEXT NOT NULL,"
+            "chunk_index INTEGER NOT NULL,"
+            "messages TEXT NOT NULL,"
+            "created_at TEXT NOT NULL,"
+            "FOREIGN KEY (session_id) REFERENCES sessions(id))",
+            "CREATE INDEX IF NOT EXISTS idx_compressed_session ON compressed_chunks(session_id, chunk_index)",
+        ]
+        for sql in migs:
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass
 
     def create_session(self) -> str:
         now = datetime.now().isoformat()
@@ -159,6 +179,71 @@ class ChatStore:
                 }
                 for row in cur.fetchall()
             ]
+
+    def get_no_compress(self, session_id: str | None = None) -> bool:
+        sid = session_id or self._session_id
+        if not sid:
+            return False
+        with sqlite3.connect(str(self.db_path)) as conn:
+            cur = conn.execute("SELECT no_compress FROM sessions WHERE id = ?", (sid,))
+            row = cur.fetchone()
+            return bool(row and row[0])
+
+    def set_no_compress(self, value: bool, session_id: str | None = None) -> None:
+        sid = session_id or self._session_id
+        if not sid:
+            return
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute("UPDATE sessions SET no_compress = ? WHERE id = ?", (int(value), sid))
+
+    def save_compressed_chunk(self, messages: list[Message], session_id: str | None = None) -> None:
+        sid = session_id or self._session_id
+        if not sid or not messages:
+            return
+        now = datetime.now().isoformat()
+        data = [m.model_dump(exclude_none=True) for m in messages]
+        with sqlite3.connect(str(self.db_path)) as conn:
+            cur = conn.execute(
+                "SELECT COALESCE(MAX(chunk_index), -1) FROM compressed_chunks WHERE session_id = ?",
+                (sid,),
+            )
+            next_idx = (cur.fetchone()[0] or -1) + 1
+            conn.execute(
+                "INSERT INTO compressed_chunks (session_id, chunk_index, messages, created_at) VALUES (?, ?, ?, ?)",
+                (sid, next_idx, json.dumps(data, ensure_ascii=False), now),
+            )
+
+    def load_compressed_chunks(self, session_id: str | None = None) -> list[list[Message]]:
+        sid = session_id or self._session_id
+        if not sid:
+            return []
+        with sqlite3.connect(str(self.db_path)) as conn:
+            cur = conn.execute(
+                "SELECT messages FROM compressed_chunks WHERE session_id = ? ORDER BY chunk_index",
+                (sid,),
+            )
+            chunks = []
+            for (row,) in cur.fetchall():
+                raw = json.loads(row)
+                chunk = [Message(**m) for m in raw]
+                chunks.append(chunk)
+            return chunks
+
+    def restore_compressed_history(self, session_id: str | None = None) -> list[Message]:
+        chunks = self.load_compressed_chunks(session_id)
+        if not chunks:
+            return []
+        restored = []
+        for chunk in chunks:
+            restored.extend(chunk)
+        return restored
+
+    def clear_compressed_chunks(self, session_id: str | None = None) -> None:
+        sid = session_id or self._session_id
+        if not sid:
+            return
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute("DELETE FROM compressed_chunks WHERE session_id = ?", (sid,))
 
     def save_usage(self, turn: int, model: str, input_tokens: int, output_tokens: int, cache_hit_input: int, cost: float) -> None:
         if not self._session_id:
