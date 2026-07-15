@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -163,6 +164,8 @@ class Session:
         self.graph = engine.graph
         self.agent_mode = ModeState()
         self._stop_requested = False
+        self._rec_start = 0
+        self._turn_start_time = 0.0
         self._gather_tools = {"read_file", "read_files", "glob", "grep", "grep_context",
                               "symbol_search", "callers", "read_symbol", "list_dir",
                               "web_fetch", "ast_summary", "py_check"}
@@ -178,10 +181,36 @@ class Session:
 
     async def process_message(self, user_input: str, websocket: WebSocket):
         self._stop_requested = False
+        self._rec_start = len(self.engine._token_counter.records)
+        self._turn_start_time = time.time()
         if self.agent_mode.is_oneshot():
             await self._process_oneshot(user_input, websocket)
         else:
             await self._process_agent(user_input, websocket)
+
+    async def _send_summary(self, ws: WebSocket):
+        records = self.engine._token_counter.records[self._rec_start:]
+        if not records:
+            return
+        total_in = sum(r.input_tokens for r in records)
+        total_out = sum(r.output_tokens for r in records)
+        total_cache = sum(r.cache_hit_input for r in records)
+        total_cost = sum(r.cost for r in records)
+        elapsed = time.time() - self._turn_start_time
+        last = records[-1]
+        ctx_pct = last.input_tokens / 1_000_000 * 100 if last.input_tokens else 0
+        cache_pct = (last.cache_hit_input / last.input_tokens * 100) if last.input_tokens > 0 else 0
+        out_pct = last.output_tokens / 128_000 * 100 if last.output_tokens else 0
+        await self._send(ws, type="summary",
+                         input_tokens=total_in,
+                         output_tokens=total_out,
+                         cache_hit=total_cache,
+                         cache_miss=total_in - total_cache,
+                         cost=round(total_cost, 4),
+                         elapsed=round(elapsed, 1),
+                         ctx_pct=round(ctx_pct, 1),
+                         cache_pct=round(cache_pct, 0),
+                         out_pct=round(out_pct, 1))
 
     async def _send(self, ws: WebSocket, **data):
         if self._stop_requested:
@@ -298,6 +327,7 @@ class Session:
                 if content:
                     self.ctx.add_assistant_message(assistant)
                     await self._send(websocket, type="text", content=content)
+                await self._send_summary(websocket)
                 await self._send(websocket, type="thinking_done")
                 break
 
@@ -442,6 +472,7 @@ class Session:
         if content and not self._stop_requested:
             await self._send(websocket, type="text", content=content)
 
+        await self._send_summary(websocket)
         await self._send(websocket, type="thinking_done")
 
     async def _exec_one_tc_result(self, tc: ToolCall):
@@ -597,6 +628,14 @@ async def status():
 @app.get("/api/commands")
 async def list_commands():
     return [{"cmd": k, "desc": v} for k, v in COMMANDS.items()]
+
+@app.get("/api/balance")
+async def balance():
+    try:
+        result = await engine.client.query_balance()
+        return result or {}
+    except Exception:
+        return {}
 
 @app.get("/api/models")
 async def list_models():

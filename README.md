@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="dekacode.png" alt="Dekacode">
+  <img src="dekacode.png" alt="Dekacode" width="480">
 </p>
 
 [简体中文](README_zh.md)
@@ -39,6 +39,7 @@ This proves: as long as the request is large enough (>2M tokens) and the prefix 
 - **Dual-model routing** — Flash (cheap) for simple tasks, Pro (powerful) for complex ones; auto-downgrade during peak hours
 - **Extended analysis toolkit** — batch execution, symbol location, code diagnosis, project summarization, dependency mapping, snapshots, incremental git analysis
 - **Rich terminal UI** — Markdown rendering, syntax highlighting, live status spinner with per-operation timing and progress bar
+- **Web UI** — FastAPI-based web interface with collapsible sidebar, real-time execution panel, model/mode switcher, and floating input
 - **Session persistence** — SQLite-backed conversation history with `/resume` to restore previous sessions
 - **Modular prompts** — YAML front-matter fragments (`enabled: true/false`, `order:`) for flexible system prompt composition
 - **File watcher** — detects source changes and incrementally rebuilds the call graph
@@ -83,7 +84,8 @@ See `.env.example` for all options (dual API keys, provider switching, session l
 
 ```bash
 cd /your/project
-python /path/to/dekacode/main.py
+python /path/to/dekacode/main.py          # TUI mode
+python /path/to/dekacode/main.py --web    # Web UI mode (port 8080)
 ```
 
 ---
@@ -106,7 +108,7 @@ python /path/to/dekacode/main.py
 | `/undo` | Undo the last turn |
 | `/flash` | Switch to flash model (cheap) |
 | `/pro` | Switch to pro model (powerful) |
-| `/mode` | Auto model selection |
+| `/mode` | Auto / oneshot mode |
 | `/help` | Show all commands |
 | `/exit` | Exit |
 
@@ -130,6 +132,7 @@ main.py                     Entry point: main loop, command dispatch, tool execu
 ├── prompt_engine.py        Builds system prompt from prompts/*.md fragments
 ├── context.py              Three-zone context (prefix / history / draft)
 │   └── SpeculativePrefetcher  Auto-resolves undefined symbols from error output
+├── context_gatherer.py     One-shot mode context assembly from @ directives
 ├── skill.py                Skill base class, registry, tool definition generation
 ├── router.py               Flash/Pro model selection with peak-hour awareness
 ├── token_counter.py        Token & cost tracking (cache hit/miss, peak multiplier)
@@ -138,9 +141,13 @@ main.py                     Entry point: main loop, command dispatch, tool execu
 ├── chat_store.py           SQLite session persistence (messages, usage, predictor state)
 ├── session_logger.py       Detailed JSON request/response logging
 ├── status_display.py       Rich terminal status spinner with progress bars
+├── modes.py                Agent / oneshot mode state machine
 ├── config.py               Pydantic-settings config (.env)
 ├── models.py               Data models: Message, ToolCall, Function, etc.
-└── utils.py                LLM HTTP client with retry logic
+├── utils.py                LLM HTTP client with retry logic
+└── webui/                  FastAPI web interface
+    ├── server.py           WebSocket handler, REST API, static serving
+    └── static/             Frontend assets (HTML, JS, CSS, logo)
 
 skills/                     Tool implementations
 ├── bash.py                 Shell command execution

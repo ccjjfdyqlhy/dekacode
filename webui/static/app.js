@@ -83,20 +83,36 @@ function handleMessage(data) {
       break;
 
     case 'tool_calls':
-      if (!currentAssistantEl) {
-        currentAssistantEl = createAssistantMessage();
-      }
-      addToolCallsToThinking(data.calls, data.phase || '');
+      addToolCallsToExec(data.calls);
+      addToolCallsToThinking(data.calls);
       break;
 
     case 'tool_result':
       updateToolResult(data.id, data.name, data.success, data.content);
+      {
+        const item = document.querySelector(`.tool-result-item[data-call-id="${data.id}"]`);
+        if (item) {
+          const icon = item.querySelector('.status-icon');
+          if (icon) icon.textContent = data.success ? '\u2705' : '\u274C';
+        }
+      }
       break;
 
     case 'tool_results':
       if (data.results) {
-        data.results.forEach(r => updateToolResult(r.id, r.name, true, r.content));
+        data.results.forEach(r => {
+          updateToolResult(r.id, r.name, true, r.content);
+          const item = document.querySelector(`.tool-result-item[data-call-id="${r.id}"]`);
+          if (item) {
+            const icon = item.querySelector('.status-icon');
+            if (icon) icon.textContent = '\u2705';
+          }
+        });
       }
+      break;
+
+    case 'summary':
+      appendSummary(data);
       break;
 
     case 'text':
@@ -117,13 +133,21 @@ function handleMessage(data) {
       mode = data.mode;
       document.getElementById('modeBadge').textContent = mode;
       document.getElementById('modeBadge').className = 'mode-badge ' + mode;
+      {
+        const hint = document.getElementById('inputHint');
+        hint.textContent = mode === 'oneshot'
+          ? 'One-Shot mode \u2014 use @req, @sym, @grep, @ls, @tree to declare context'
+          : '';
+      }
       showToast(`Mode: ${mode}`);
+      updateModelBtnLabel();
       break;
 
     case 'model_switched':
       currentModel = data.model;
       document.getElementById('modelName').textContent = data.display || data.model;
       showToast(`Model: ${data.display || data.model}`);
+      updateModelBtnLabel();
       break;
   }
 }
@@ -157,47 +181,32 @@ function hideWelcome() {
   if (w) w.style.display = 'none';
 }
 
-// ─── Thinking Bar ─────────────────────────────────────────────────
-
-let _thinkingStart = null;
-let _tickerInterval = null;
+// ─── Execution Panel (replaces thinking bar) ─────────────────────
 
 function showThinkingBar(text) {
-  const bar = document.getElementById('thinkingBar');
-  document.getElementById('thinkingText').textContent = text;
-  bar.style.display = 'flex';
+  const panel = document.getElementById('executionPanel');
+  panel.style.display = 'block';
+  document.getElementById('execStatus').textContent = text;
+  document.getElementById('execElapsed').textContent = '0.0s';
+  document.getElementById('execBody').innerHTML = '';
   setSendButtonStop(true);
-  _thinkingStart = Date.now();
-  document.getElementById('thinkingElapsed').textContent = '0.0s';
-  startTicker();
+  _execStart = Date.now();
+  startExecTicker();
 }
 
 function updateThinkingBar(text) {
-  document.getElementById('thinkingText').textContent = text;
+  document.getElementById('execStatus').textContent = text;
 }
 
 function hideThinkingBar() {
-  document.getElementById('thinkingBar').style.display = 'none';
+  document.getElementById('executionPanel').style.display = 'none';
   setSendButtonStop(false);
-  _thinkingStart = null;
-  stopTicker();
+  stopExecTicker();
 }
 
-function startTicker() {
-  stopTicker();
-  _tickerInterval = setInterval(() => {
-    if (_thinkingStart) {
-      const elapsed = (Date.now() - _thinkingStart) / 1000;
-      document.getElementById('thinkingElapsed').textContent = elapsed.toFixed(1) + 's';
-    }
-  }, 200);
-}
-
-function stopTicker() {
-  if (_tickerInterval) {
-    clearInterval(_tickerInterval);
-    _tickerInterval = null;
-  }
+function stopGeneration() {
+  sendJson({ type: 'stop' });
+  hideThinkingBar();
 }
 
 function setSendButtonStop(isStop) {
@@ -213,13 +222,7 @@ function setSendButtonStop(isStop) {
   }
 }
 
-function stopGeneration() {
-  sendJson({ type: 'stop' });
-  setSendButtonStop(false);
-  hideThinkingBar();
-}
-
-// ─── Thinking Details ─────────────────────────────────────────────
+// ─── Thinking Details (in-message record) ────────────────────────
 
 function toggleThinkingDetails(header) {
   const body = header.nextElementSibling;
@@ -229,35 +232,68 @@ function toggleThinkingDetails(header) {
 }
 
 function addToolCallsToThinking(calls) {
-  const detailsBody = document.getElementById('thinkingDetailsBody');
-  if (!detailsBody) return;
-
+  const body = document.getElementById('thinkingDetailsBody');
+  if (!body) return;
   for (const call of calls) {
     const item = document.createElement('div');
     item.className = 'tool-result-item';
     item.dataset.callId = call.id;
     item.innerHTML = `
-      <div class="item-line">
-        <span class="status-icon">&#x23F3;</span>
-        <span class="tool-name">[${escapeHtml(call.name)}]</span>
-        <span class="item-args">${escapeHtml(formatArgs(call.args))}</span>
-      </div>
+      <span class="status-icon">&#x23F3;</span>
+      <span class="tool-name">${escapeHtml(call.name)}</span>
     `;
-    detailsBody.appendChild(item);
+    body.appendChild(item);
   }
-  scrollToBottom();
 }
 
-function updateToolResult(id, name, success, content) {
-  const item = document.querySelector(`.tool-result-item[data-call-id="${id}"]`);
+// ─── Execution Panel (live above input) ───────────────────────────
+
+let _execStart = null;
+let _execTicker = null;
+
+function toggleExecutionPanel(header) {
+  const body = header.nextElementSibling;
+  const arrow = header.querySelector('.arrow');
+  body.classList.toggle('open');
+  arrow.classList.toggle('open');
+}
+
+function addToolCallsToExec(calls) {
+  const body = document.getElementById('execBody');
+  if (!body) return;
+  for (const call of calls) {
+    const item = document.createElement('div');
+    item.className = 'exec-item';
+    item.dataset.callId = call.id;
+    item.innerHTML = `
+      <span class="exec-icon">&#x23F3;</span>
+      <span class="exec-name">${escapeHtml(call.name)}</span>
+    `;
+    body.appendChild(item);
+  }
+}
+
+function updateToolResult(id, name, success) {
+  const item = document.querySelector(`.exec-item[data-call-id="${id}"]`);
   if (!item) return;
-  const preview = (content || '').replace(/\n/g, ' ').slice(0, 200);
-  const line = item.querySelector('.item-line');
-  line.innerHTML = `
-    <span class="status-icon">${success ? '\u2705' : '\u274C'}</span>
-    <span class="tool-name">[${escapeHtml(name)}]</span>
-    <span class="item-args">${escapeHtml(preview)}</span>
-  `;
+  item.querySelector('.exec-icon').textContent = success ? '\u2705' : '\u274C';
+}
+
+function startExecTicker() {
+  stopExecTicker();
+  _execTicker = setInterval(() => {
+    if (_execStart) {
+      const elapsed = (Date.now() - _execStart) / 1000;
+      document.getElementById('execElapsed').textContent = elapsed.toFixed(1) + 's';
+    }
+  }, 200);
+}
+
+function stopExecTicker() {
+  if (_execTicker) {
+    clearInterval(_execTicker);
+    _execTicker = null;
+  }
 }
 
 // ─── Messages ─────────────────────────────────────────────────────
@@ -303,6 +339,40 @@ function appendCommandOutput(text) {
   isProcessing = false;
 }
 
+function appendSummary(data) {
+  if (!currentAssistantEl) {
+    currentAssistantEl = createAssistantMessage();
+  }
+  let summaryEl = currentAssistantEl.querySelector('.summary-bar');
+  if (!summaryEl) {
+    summaryEl = document.createElement('div');
+    summaryEl.className = 'summary-bar';
+    currentAssistantEl.appendChild(summaryEl);
+  }
+  const fmt = (n) => {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+    if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+    return String(n);
+  };
+  let balanceHtml = '';
+  const bal = window._balance;
+  if (bal && bal.balanceUsd !== undefined) {
+    balanceHtml = `<span title="Balance">$${bal.balanceUsd.toFixed(2)}</span>`;
+  }
+  summaryEl.innerHTML = `
+    <span title="Input tokens">↑ ${fmt(data.input_tokens)} in</span>
+    <span title="Output tokens">↓ ${fmt(data.output_tokens)} out</span>
+    <span title="Cache hit">cache ${fmt(data.cache_hit)}/${data.cache_pct}%</span>
+    <span title="Cost">¥${data.cost}</span>
+    <span title="Context usage">ctx ${data.ctx_pct}%</span>
+    <span title="Output usage">out ${data.out_pct}%</span>
+    <span title="Elapsed">${data.elapsed}s</span>
+    ${balanceHtml}
+  `;
+  // Fetch balance in background
+  fetch('/api/balance').then(r => r.json()).then(b => { window._balance = b; }).catch(() => {});
+}
+
 function appendError(text) {
   hideWelcome();
   const div = document.createElement('div');
@@ -320,12 +390,12 @@ const input = document.getElementById('input');
 
 input.addEventListener('input', () => {
   input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  input.style.height = Math.min(input.scrollHeight, 240) + 'px';
   handleCommandAutocomplete();
 });
 
 input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
   }
@@ -568,6 +638,7 @@ function restoreChatFromStorage() {
     showWelcome();
   }
   updateSessionList();
+  scrollToBottom();
 }
 
 // ─── Welcome / dekacode.png ────────────────────────────────────────
@@ -640,6 +711,15 @@ function renderMarkdown(text) {
   html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
   html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/^(\|.+\|)\n(\|[-:| ]+\|)\n((?:\|.+\|\n?)*)/gm, (_, head, sep, body) => {
+    const headers = head.slice(1, -1).split('|').map(c => `<th>${c.trim()}</th>`).join('');
+    const rows = body.trim().split('\n').filter(Boolean).map(line => {
+      const cells = line.slice(1, -1).split('|').map(c => `<td>${c.trim()}</td>`).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('');
+    return `<table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
+  });
+  html = html.replace(/^[-*_]{3,}\s*$/gm, '<hr>');
   html = html.replace(/\n\n/g, '</p><p>');
   html = html.replace(/\n/g, '<br>');
   return '<p>' + html + '</p>';
@@ -651,14 +731,6 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
-}
-
-function formatArgs(argsStr) {
-  try {
-    return JSON.stringify(JSON.parse(argsStr), null, 2);
-  } catch {
-    return argsStr;
-  }
 }
 
 function showToast(msg) {
@@ -700,6 +772,15 @@ async function fetchModels() {
       { id: 'pro', label: 'Pro', active: false },
     ];
   }
+  updateModelBtnLabel();
+}
+
+function updateModelBtnLabel() {
+  const label = document.getElementById('modelBtnLabel');
+  if (!label) return;
+  const modeName = mode === 'agent' ? 'Agent' : 'OneShot';
+  const modelName = (availableModels.find(m => m.id === currentModel)?.label || currentModel);
+  label.textContent = modeName + ' ' + modelName;
 }
 
 function toggleModelPanel() {
@@ -708,12 +789,32 @@ function toggleModelPanel() {
     panel.style.display = 'none';
     return;
   }
-  panel.innerHTML = availableModels.map(m =>
-    `<div class="model-option ${m.id === currentModel ? 'active' : ''}" onclick="selectModel('${m.id}')">
-      ${m.id === currentModel ? '<span class="model-check">&#x2713;</span>' : '<span class="model-check"></span>'}
-      ${escapeHtml(m.label || m.id)}
-    </div>`
-  ).join('');
+
+  const modeLabel = mode === 'agent' ? 'Agent' : 'OneShot';
+
+  let modeHtml = `
+    <div class="mp-section mp-mode-section">
+      <div class="mp-mode-label">${modeLabel}</div>
+      <div class="mp-slider">
+        <div class="mp-slider-option ${mode === 'agent' ? 'active' : ''}" onclick="setMode('agent')">Agent</div>
+        <div class="mp-slider-option ${mode === 'oneshot' ? 'active' : ''}" onclick="setMode('oneshot')">OneShot</div>
+        <div class="mp-slider-option locked">anaii</div>
+      </div>
+    </div>`;
+
+  let modelHtml = `<div class="mp-section">`;
+  for (const m of availableModels) {
+    const active = m.id === currentModel ? 'active' : '';
+    const label = m.label || m.id;
+    modelHtml += `
+      <div class="model-option ${active}" onclick="selectModel('${m.id}')">
+        <div class="mo-main">${active ? '<span class="model-check">&#x2713;</span> ' : ''}${escapeHtml(label)}</div>
+        <div class="mo-sub">${escapeHtml(m.model || '')}</div>
+      </div>`;
+  }
+  modelHtml += `</div>`;
+
+  panel.innerHTML = modeHtml + modelHtml;
   panel.style.display = 'block';
 }
 
@@ -725,6 +826,24 @@ function selectModel(id) {
   currentModel = id;
   sendJson({ type: 'switch_model', model: id });
   document.getElementById('modelPanel').style.display = 'none';
+  updateModelBtnLabel();
+}
+
+function setMode(newMode) {
+  if (newMode === mode) {
+    document.getElementById('modelPanel').style.display = 'none';
+    return;
+  }
+  mode = newMode;
+  sendJson({ type: 'mode', mode: newMode });
+  document.getElementById('modeBadge').textContent = newMode;
+  document.getElementById('modeBadge').className = 'mode-badge ' + newMode;
+  const hint = document.getElementById('inputHint');
+  hint.textContent = newMode === 'oneshot'
+    ? 'One-Shot mode \u2014 use @req, @sym, @grep, @ls, @tree to declare context'
+    : '';
+  document.getElementById('modelPanel').style.display = 'none';
+  updateModelBtnLabel();
 }
 
 // Close model panel on outside click
@@ -749,7 +868,28 @@ function toggleSidebar() {
   }
 }
 
+const WELCOME_PHRASES = [
+  "How can I help you?",
+  "What are we building today?",
+  "Ready to code — what's the plan?",
+  "What would you like me to work on?",
+  "Fire away — what do you need?",
+  "What's on your mind?",
+  "Let's build something great.",
+  "I'm listening — what's the task?",
+  "What should we tackle next?",
+  "Tell me what you need done.",
+  "All ears — where do we start?",
+  "What's the mission?",
+  "Ready when you are — what's first?",
+  "What can I help you craft?",
+];
+
 document.addEventListener('DOMContentLoaded', () => {
+  // Set random welcome phrase
+  const wt = document.querySelector('.welcome-text');
+  if (wt) wt.textContent = WELCOME_PHRASES[Math.floor(Math.random() * WELCOME_PHRASES.length)];
+
   // Cache-bust the logo
   const logo = document.getElementById('welcomeLogo');
   if (logo) logo.src = '/logo.png?_=' + Date.now();
@@ -760,18 +900,4 @@ document.addEventListener('DOMContentLoaded', () => {
   if (input) input.focus();
   document.getElementById('sendBtn').onclick = sendMessage;
 
-  // Click thinking bar to toggle details
-  const tbar = document.getElementById('thinkingBar');
-  tbar.addEventListener('click', (e) => {
-    if (e.target.closest('.stop-btn')) return;
-    const details = document.getElementById('thinkingDetails');
-    if (details) {
-      const body = document.getElementById('thinkingDetailsBody');
-      const arrow = details.querySelector('.arrow');
-      if (body) {
-        body.classList.toggle('open');
-        if (arrow) arrow.classList.toggle('open');
-      }
-    }
-  });
 });

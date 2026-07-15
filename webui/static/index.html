@@ -29,37 +29,40 @@
         <span class="icon">&#x2699;</span> Options
       </button>
       <div class="options-dropdown" id="optionsMenu">
-        <div class="options-item" onclick="toggleMode()">&#x21bb; Toggle Mode</div>
-        <div class="options-item" onclick="clearChat()">&#x2716; Clear</div>
       </div>
     </div>
   </div>
   <div id="main">
-    <div id="thinkingBar" class="thinking-bar" style="display:none">
-      <div class="thinking-indicator">
-        <span class="spinner-small"></span>
-        <span class="thinking-text" id="thinkingText">Thinking...</span>
-        <span class="thinking-elapsed" id="thinkingElapsed"></span>
-      </div>
-      <button class="stop-btn" id="stopBtn" onclick="stopGeneration()">&#x25A0; Stop</button>
-    </div>
     <div id="messages"></div>
     <div id="welcome">
       <img src="/logo.png" alt="Dekacode" class="welcome-logo" id="welcomeLogo">
       <div class="welcome-text">How can I help you?</div>
       <div class="welcome-project" id="welcomeProject"></div>
     </div>
+    <div id="executionPanel" class="execution-panel" style="display:none">
+      <div class="ep-header" onclick="toggleExecutionPanel(this)">
+        <span class="spinner-small ep-spinner"></span>
+        <span class="arrow">&#x25B6;</span>
+        <span class="ep-status" id="execStatus">Thinking</span>
+        <span class="ep-elapsed" id="execElapsed"></span>
+        <button class="ep-stop" id="execStopBtn" onclick="event.stopPropagation();stopGeneration()">&#x25A0;</button>
+      </div>
+      <div class="ep-body" id="execBody"></div>
+    </div>
     <div id="inputArea">
       <div id="inputBar">
         <div id="cmdPanel" class="cmd-panel" style="display:none"></div>
-        <textarea id="input" rows="1" placeholder="Type a message... (Enter to send, Tab for commands)"></textarea>
+        <textarea id="input" rows="1" placeholder="Type a message... (Enter to send, Ctrl+Enter newline, / for commands)"></textarea>
         <div class="input-actions">
-          <button id="modelBtn" class="input-action-btn" onclick="toggleModelPanel()" title="Switch model">&#x2699;</button>
+          <button id="modelBtn" class="input-action-btn" onclick="toggleModelPanel()" title="Switch model">
+            <span id="modelBtnLabel">Agent Flash</span>
+          </button>
           <button id="sendBtn" class="input-action-btn send-btn">&#x27A4;</button>
         </div>
         <div id="modelPanel" class="model-panel" style="display:none"></div>
       </div>
       <div class="input-hint" id="inputHint"></div>
+      <div id="footerNotice">Dekacode is AI-powered — verify before applying.</div>
     </div>
   </div>
 </div>

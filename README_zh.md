@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="dekacode.png" alt="Dekacode">
+  <img src="dekacode.png" alt="Dekacode" width="480">
 </p>
 
 **极致省 Token 的终端 AI 编程助手。**
@@ -37,6 +37,7 @@ Context 5.8%  Cache 100%  Output 0.2%  │ 202.7s
 - **双模型路由** — Flash（便宜）处理简单任务，Pro（强大）处理复杂任务；高峰时段自动降级
 - **扩展分析工具集** — 批量执行、符号定位、代码诊断、项目摘要、依赖映射、快照、增量 Git 分析
 - **Rich 终端界面** — Markdown 渲染、语法高亮、实时状态动画（含进度条和计时）
+- **Web UI** — FastAPI 网页界面，可折叠侧栏、实时执行面板、模型/模式切换器、浮动输入框
 - **会话持久化** — SQLite 存储聊天记录，`/resume` 一键恢复
 - **模块化提示词** — YAML 前注片段（`enabled: true/false`、`order:`），灵活组合 system prompt
 - **文件监听** — 检测源码变更并增量重建调用图
@@ -81,7 +82,8 @@ PRO_MODEL=deepseek-v4-pro
 
 ```bash
 cd /your/project
-python /path/to/dekacode/main.py
+python /path/to/dekacode/main.py          # TUI 模式
+python /path/to/dekacode/main.py --web    # Web UI 模式（端口 8080）
 ```
 
 ---
@@ -128,6 +130,7 @@ main.py                     入口：主循环、命令分发、工具执行
 ├── prompt_engine.py        从 prompts/*.md 片段构建 system prompt
 ├── context.py              三层上下文（prefix / history / draft）
 │   └── SpeculativePrefetcher  从错误输出自动解析未定义符号
+├── context_gatherer.py     One-Shot 模式下通过 @ 指令收集上下文
 ├── skill.py                Skill 基类、注册中心、工具定义生成
 ├── router.py               Flash/Pro 模型选择，高峰时段感知
 ├── token_counter.py        Token 和花费追踪（缓存命中/未命中、高峰倍率）
@@ -136,9 +139,13 @@ main.py                     入口：主循环、命令分发、工具执行
 ├── chat_store.py           SQLite 会话持久化（消息、用量、预测器状态）
 ├── session_logger.py       详细 JSON 请求/响应日志
 ├── status_display.py       富终端状态动画（含进度条）
+├── modes.py                Agent / OneShot 模式状态机
 ├── config.py               Pydantic-settings 配置（.env）
 ├── models.py               数据模型：Message、ToolCall、Function 等
-└── utils.py                LLM HTTP 客户端，含重试逻辑
+├── utils.py                LLM HTTP 客户端，含重试逻辑
+└── webui/                  FastAPI 网页界面
+    ├── server.py           WebSocket 通信、REST API、静态文件
+    └── static/             前端资源（HTML、JS、CSS、logo）
 
 skills/                     工具实现
 ├── bash.py                  Shell 命令执行
