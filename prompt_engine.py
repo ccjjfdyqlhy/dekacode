@@ -14,6 +14,7 @@ class PromptFragment:
         self.enabled = True
         self.order = 50
         self.content = ""
+        self.id = Path(file_path).stem
         self._parse()
 
     def _parse(self) -> None:
@@ -82,6 +83,8 @@ class PromptEngine:
     def build_system_prompt(self, tool_descriptions: Optional[list[str]] = None) -> str:
         sections = []
         for frag in self.get_enabled():
+            if frag.title.startswith("一次性模式"):
+                continue
             content = frag.content
             if "{tools}" in content:
                 if tool_descriptions:
@@ -95,6 +98,29 @@ class PromptEngine:
 
         return "\n\n".join(sections)
 
+    def build_oneshot_system_prompt(self, phase: str, tool_descriptions: Optional[list[str]] = None) -> str:
+        exclude_titles = {"简言模式", "项目总览协议"}
+        target = "一次性模式 - 信息收集阶段" if phase == "gather" else "一次性模式 - 执行阶段"
+        sections = []
+        for frag in sorted(self.fragments, key=lambda f: f.order):
+            if not frag.enabled:
+                continue
+            if frag.title in exclude_titles:
+                continue
+            if frag.title.startswith("一次性模式") and frag.title != target:
+                continue
+            content = frag.content
+            if "{tools}" in content:
+                if tool_descriptions:
+                    content = content.replace(
+                        "{tools}", "\n".join(f"- {d}" for d in tool_descriptions)
+                    )
+                else:
+                    content = content.replace("{tools}", "(no tools available)")
+            if content:
+                sections.append(content)
+        return "\n\n".join(sections)
+
     def build_tool_descriptions(self, registry) -> list[str]:
         lines = []
         for skill_def in registry.get_tool_definitions():
@@ -105,6 +131,12 @@ class PromptEngine:
             param_str = ", ".join(params.keys()) if params else ""
             lines.append(f"{name}: {desc}" + (f"  Args: {param_str}" if param_str else ""))
         return lines
+
+    def get_fragment(self, fragment_id: str) -> PromptFragment | None:
+        for frag in self.fragments:
+            if frag.id == fragment_id:
+                return frag
+        return None
 
     def reload(self) -> None:
         self._loaded = False

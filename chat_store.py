@@ -57,6 +57,7 @@ class ChatStore:
     @staticmethod
     def _migrate(conn) -> None:
         migs = [
+            "ALTER TABLE sessions ADD COLUMN mode TEXT DEFAULT 'agent'",
             "ALTER TABLE sessions ADD COLUMN no_compress INTEGER DEFAULT 0",
             "CREATE TABLE IF NOT EXISTS compressed_chunks ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -179,6 +180,22 @@ class ChatStore:
                 }
                 for row in cur.fetchall()
             ]
+
+    def get_mode(self, session_id: str | None = None) -> str | None:
+        sid = session_id or self._session_id
+        if not sid:
+            return None
+        with sqlite3.connect(str(self.db_path)) as conn:
+            cur = conn.execute("SELECT mode FROM sessions WHERE id = ?", (sid,))
+            row = cur.fetchone()
+            return row[0] if row else None
+
+    def set_mode(self, mode: str, session_id: str | None = None) -> None:
+        sid = session_id or self._session_id
+        if not sid:
+            return
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute("UPDATE sessions SET mode = ? WHERE id = ?", (mode, sid))
 
     def get_no_compress(self, session_id: str | None = None) -> bool:
         sid = session_id or self._session_id

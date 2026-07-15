@@ -1,11 +1,48 @@
+#!/usr/bin/env python3
 import asyncio
 import json
 import os
 import re
+import shutil
+import stat
+import subprocess
 import sys
 import time
 
 VERSION = "V0.2.4"
+
+_DEKACODE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _ensure_command() -> None:
+    if shutil.which("dekacode"):
+        return
+    bin_dir = os.path.expanduser("~/.local/bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    link_path = os.path.join(bin_dir, "dekacode")
+    if os.path.exists(link_path):
+        return
+    try:
+        os.symlink(os.path.join(_DEKACODE_DIR, "main.py"), link_path)
+        os.chmod(link_path, os.stat(link_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError:
+        pass
+    shell_rc = None
+    shell = os.environ.get("SHELL", "")
+    if "zsh" in shell:
+        shell_rc = os.path.expanduser("~/.zshrc")
+    elif "bash" in shell:
+        shell_rc = os.path.expanduser("~/.bashrc")
+    if shell_rc and os.path.isfile(shell_rc):
+        with open(shell_rc, "r") as f:
+            existing = f.read()
+        export_line = f'\nexport PATH="$HOME/.local/bin:$PATH"\n'
+        if export_line.strip() not in existing:
+            with open(shell_rc, "a") as f:
+                f.write(export_line)
+
+
+
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
@@ -33,6 +70,8 @@ from utils import LLMClient
 from cache_warmer import CacheWarmer
 from predictor import DurationPredictor
 from memory import MemoryStore
+from modes import AgentMode, ModeState
+from context_gatherer import ContextGatherer
 
 _FILE_REF_RE = re.compile(r"([\w./\\-]+\.py)")
 
@@ -120,6 +159,13 @@ _TOOL_KEYWORDS: list[tuple[set[str], set[str]]] = [
     (_GITHUB_TOOLS, {"github", "issue", "pull", "pr", "workflow"}),
 ]
 
+_GATHER_TOOLS = {"read_file", "read_files", "glob", "grep", "grep_context",
+                 "symbol_search", "callers", "read_symbol", "list_dir",
+                 "web_fetch", "ast_summary", "py_check"}
+
+_EXECUTE_TOOLS = {"write_file", "edit_file", "bash",
+                  "dekacode", "github", "diff_file"}
+
 def _filter_tool_defs(registry: SkillRegistry, user_input: str) -> list:
     active: set[str] = set(_ESSENTIAL_TOOLS)
     user_lower = user_input.lower()
@@ -127,6 +173,9 @@ def _filter_tool_defs(registry: SkillRegistry, user_input: str) -> list:
         if any(kw in user_lower for kw in keywords):
             active.update(tools)
     return [td for td in registry.get_tool_definitions() if td.function["name"] in active]
+
+def _filter_tools_by_set(registry: SkillRegistry, active_set: set[str]) -> list:
+    return [td for td in registry.get_tool_definitions() if td.function["name"] in active_set]
 
 def _setup_registry(graph=None, settings=None) -> SkillRegistry:
     from skills.web_fetch import WebFetchSkill
@@ -203,7 +252,7 @@ def _attach_imports(ctx: ContextManager, user_input: str) -> None:
         ctx.history.append(Message(role="system", content=f"# Resolved imports\n{attachment}"))
 
 
-def _build_graph(project_root: str):
+def _build_graph(project_root: str, max_depth: int = -1):
     from code_graph.builder import GraphBuilder
     from code_graph.cache import GraphCache
     cache = GraphCache(project_root)
@@ -219,9 +268,13 @@ def _build_graph(project_root: str):
                 (" (cached)", "dim"),
             ))
             return graph
-    _rc.print("  [yellow]⟳[/] Building call graph (full scan)...")
+    depth_hint = f"  max_depth={max_depth}" if max_depth >= 0 else ""
+    parts = [("  ⟳ ", "yellow"), ("Building call graph (full scan)...", "")]
+    if depth_hint:
+        parts.append((depth_hint, "dim"))
+    _rc.print(Text.assemble(*[Text(t, style=s) for t, s in parts]))
     t0 = time.time()
-    builder = GraphBuilder(project_root)
+    builder = GraphBuilder(project_root, max_depth=max_depth)
     graph = builder.build()
     cache.save(graph)
     _rc.print(Text.assemble(
@@ -248,7 +301,7 @@ async def run_agent_loop(settings: Settings) -> None:
         (" activated", "bold cyan"),
     ))
 
-    graph = _build_graph(project_root)
+    graph = _build_graph(project_root, max_depth=settings.max_depth)
     registry = _setup_registry(graph, settings)
 
     prompt_engine = PromptEngine()
@@ -294,13 +347,24 @@ async def run_agent_loop(settings: Settings) -> None:
     client.switch_model(model_mode)
     current_model_name = client.model
 
+    agent_mode = ModeState()
+    _saved_mode = chat_store.get_mode()
+    if _saved_mode:
+        try:
+            agent_mode.set(_saved_mode)
+            if agent_mode.is_oneshot():
+                model_mode = router.switch("auto")
+                current_model_name = client.switch_model(model_mode)
+        except ValueError:
+            pass
+
     turn_start_idx = 0
 
     _console.print(Text.assemble(
         ("  Deka ready", "bold green"),
         ("  provider=", "dim"), (settings.provider, "yellow"),
         ("  model=", "dim"), (current_model_name, "cyan"),
-        ("  mode=", "dim"), (model_mode, "magenta"),
+        ("  mode=", "dim"), (agent_mode.mode.value, "magenta"),
         ("  peak=", "dim"), ("⚠", "red") if in_peak_hours() else ("✓", "green"),
     ))
     _console.print(Text.assemble(
@@ -329,7 +393,7 @@ async def run_agent_loop(settings: Settings) -> None:
         if changed:
             _console.print(f"  [yellow]⟳[/] {len(changed)} file(s) modified, rebuilding call graph...")
             t0 = time.time()
-            builder = GraphBuilder(project_root)
+            builder = GraphBuilder(project_root, max_depth=settings.max_depth)
             graph = builder.build()
             graph_cache.save(graph)
             _console.print(Text.assemble(
@@ -440,6 +504,184 @@ async def run_agent_loop(settings: Settings) -> None:
         ))
         _render_hist(hist)
         return True
+
+    async def _run_oneshot() -> None:
+        nonlocal turn, model_mode, current_model_name, _turn_elapsed, turn_start_idx
+        gatherer = ContextGatherer(project_root, graph)
+        parse_result = gatherer.parse(user_input)
+        oneshot_input = parse_result.clean_input or user_input
+
+        if parse_result.directives_found and parse_result.context_block:
+            ctx.history.append(Message(role="system", content=parse_result.context_block))
+
+        if parse_result.directives_found:
+            kinds = ", ".join(f"@{k}" for k in sorted(set(parse_result.directive_kinds)))
+            _console.print(Text.assemble(
+                ("  ✓ Detected: ", "green"),
+                (kinds, "cyan"),
+            ))
+        else:
+            _console.print("  One-Shot  [dim](no @ directives — auto-gathering context)[/]")
+
+        # --- Phase 1: Information Gathering ---
+        gather_prompt = prompt_engine.build_oneshot_system_prompt("gather", tool_lines)
+        gather_msgs = [Message(role="system", content=gather_prompt)]
+        gather_msgs += ctx.history + ctx.draft
+        gather_msgs.append(Message(role="user", content=oneshot_input))
+        gather_tool_defs = _filter_tools_by_set(registry, _GATHER_TOOLS)
+
+        await display.status("Gathering info (phase 1/2)")
+        t0 = time.time()
+        rec_len_before = len(token_counter.records)
+        try:
+            response = await client.chat(gather_msgs, gather_tool_defs, model_mode=model_mode, max_tokens=16384)
+        except Exception as e:
+            await display.end()
+            _console.print(f"  [red]✗ API Error (gather phase): {e}[/]")
+            return
+        elapsed = time.time() - t0
+
+        choices = response.get("choices")
+        if not choices:
+            await display.end()
+            _console.print("  [red]✗ Empty response (gather phase)[/]")
+            ctx.rollback_draft()
+            return
+
+        rec = token_counter.record(response, model=model_mode, elapsed=elapsed)
+        _turn_elapsed += elapsed
+        logger.log_response(response, elapsed, token_counter.display(rec))
+
+        msg = choices[0].get("message", {})
+        tool_calls = msg.get("tool_calls")
+        gather_content = msg.get("content") or ""
+
+        if tool_calls:
+            gather_parsed = []
+            for tc in tool_calls:
+                func = Function(name=tc["function"]["name"], arguments=tc["function"]["arguments"])
+                gather_parsed.append(ToolCall(id=tc["id"], type=tc.get("type", "function"), function=func))
+
+            assistant = Message(role="assistant", content=gather_content or None)
+            assistant.tool_calls = gather_parsed
+            ctx.draft.append(assistant)
+
+            if len(gather_parsed) > 1:
+                await display.status("Executing gather batch", f"{len(gather_parsed)} tool calls")
+            elif gather_parsed:
+                t = gather_parsed[0]
+                try:
+                    a = json.loads(t.function.arguments)
+                    lbl = _tool_status_map.get(t.function.name, "Working")
+                    det = _get_tool_detail(t.function.name, a)
+                    await display.status(lbl, det)
+                except json.JSONDecodeError:
+                    pass
+
+            async def _exec_gather_tc(tc):
+                try:
+                    args = json.loads(tc.function.arguments)
+                    result = await registry.execute(tc.function.name, args)
+                    return (tc, result.output if result.success else f"[Error] {result.output}")
+                except json.JSONDecodeError as e:
+                    return (tc, f"[Parse Error] Invalid JSON arguments: {e}")
+                except Exception as e:
+                    return (tc, f"[Error] Tool crashed: {type(e).__name__}: {e}")
+
+            try:
+                gather_results = await asyncio.gather(*[_exec_gather_tc(tc) for tc in gather_parsed])
+            except KeyboardInterrupt:
+                await display.end()
+                ctx.rollback_draft()
+                _console.print("  [yellow]⏹ Interrupted during gather phase[/]")
+                return
+
+            for tc, result_text in gather_results:
+                ctx.add_tool_result(tc.id, tc.function.name, result_text)
+            ctx.commit_draft()
+
+        # --- Phase 2: Execution ---
+        exec_prompt = prompt_engine.build_oneshot_system_prompt("execute", tool_lines)
+        exec_msgs = [Message(role="system", content=exec_prompt)]
+        exec_msgs += ctx.history + ctx.draft
+        exec_tool_defs = _filter_tools_by_set(registry, _EXECUTE_TOOLS)
+
+        await display.status("Planning execution (phase 2/2)")
+        t0 = time.time()
+        try:
+            response = await client.chat(exec_msgs, exec_tool_defs, model_mode=model_mode, max_tokens=16384)
+        except Exception as e:
+            await display.end()
+            _console.print(f"  [red]✗ API Error (execute phase): {e}[/]")
+            return
+        elapsed = time.time() - t0
+
+        choices = response.get("choices")
+        if not choices:
+            await display.end()
+            _console.print("  [red]✗ Empty response (execute phase)[/]")
+            return
+
+        rec = token_counter.record(response, model=model_mode, elapsed=elapsed)
+        _turn_elapsed += elapsed
+        usage_text = token_counter.display(rec)
+        display.token(usage_text)
+        logger.log_response(response, elapsed, usage_text)
+
+        msg = choices[0].get("message", {})
+        tool_calls = msg.get("tool_calls")
+        content = msg.get("content") or ""
+
+        if tool_calls:
+            exec_parsed = []
+            for tc in tool_calls:
+                func = Function(name=tc["function"]["name"], arguments=tc["function"]["arguments"])
+                exec_parsed.append(ToolCall(id=tc["id"], type=tc.get("type", "function"), function=func))
+
+            assistant = Message(role="assistant", content=content or None)
+            assistant.tool_calls = exec_parsed
+            ctx.draft.append(assistant)
+
+            for tc in exec_parsed:
+                try:
+                    args = json.loads(tc.function.arguments)
+                    lbl = _tool_status_map.get(tc.function.name, "Working")
+                    det = _get_tool_detail(tc.function.name, args)
+                    await display.status(lbl, det, description=content)
+                    result = await registry.execute(tc.function.name, args)
+                    if result.success:
+                        output_preview = result.output[:200].replace("\n", " ")
+                        _console.print(f"  [green]✓[/] [{tc.function.name}] {output_preview}")
+                    else:
+                        _console.print(f"  [red]✗[/] [{tc.function.name}] {result.output[:200]}")
+                    ctx.add_tool_result(tc.id, tc.function.name, result.output)
+                except json.JSONDecodeError as e:
+                    _console.print(f"  [red]✗[/] [{tc.function.name}] Parse error: {e}")
+                except Exception as e:
+                    _console.print(f"  [red]✗[/] [{tc.function.name}] Crashed: {type(e).__name__}: {e}")
+            ctx.commit_draft()
+
+        await display.end()
+
+        if content:
+            _console.print(Markdown(content))
+
+        turn_total_in = sum(r.input_tokens for r in token_counter.records[rec_len_before:])
+        turn_total_out = sum(r.output_tokens for r in token_counter.records[rec_len_before:])
+        turn_total_cost = sum(r.cost for r in token_counter.records[rec_len_before:])
+        _console.print(Text.assemble(
+            ("  ∑ ", "yellow"),
+            (f"{fmt_tokens(turn_total_in)} ", ""),
+            ("in  ", "dim"),
+            ("↓ ", "cyan"),
+            (f"{fmt_tokens(turn_total_out)} ", ""),
+            ("out  ", "dim"),
+            ("│ ", "dim"),
+            (f"¥{turn_total_cost:.4f}", "bold yellow"),
+            ("  │ ", "dim"),
+            (f"{_turn_elapsed:.1f}s", "magenta"),
+        ))
+        turn = 1
 
     warmer.set_context(ctx, model_mode)
 
@@ -595,18 +837,27 @@ async def run_agent_loop(settings: Settings) -> None:
                         ("  Pro ", "magenta"), ("▸ ", "dim"), (current_model_name, "bold"),
                     ))
 
-                elif user_input == "/mode":
-                    model_mode = router.switch("auto")
-                    peak = in_peak_hours()
-                    model_mode = "flash"
-                    current_model_name = client.switch_model("flash")
+                elif user_input in ("/mode", "/mode agent", "/mode oneshot"):
+                    parts = user_input.split()
+                    if len(parts) == 1 or parts[1] == agent_mode.mode.value:
+                        agent_mode.toggle()
+                    else:
+                        agent_mode.set(parts[1])
+                    if chat_store.session_id:
+                        chat_store.set_mode(agent_mode.mode.value)
+                    model_mode = router.switch("auto" if agent_mode.is_agent() else "flash")
+                    current_model_name = client.switch_model(model_mode)
+                    label = agent_mode.mode.value
                     _console.print(Text.assemble(
-                        ("  Auto ", "green"),
-                        ("▸ ", "dim"),
+                        ("  Mode: ", "cyan"),
+                        (label, "bold magenta"),
+                        ("  model=", "dim"),
                         (current_model_name, "bold"),
-                        ("  ", ""),
-                        ("peak", "red") if peak else ("ok", "green"),
                     ))
+                    if agent_mode.is_oneshot():
+                        _console.print(Text.assemble(
+                            ("  Use @req, @sym, @grep, @ls, @tree to declare context", "dim"),
+                        ))
 
                 elif user_input == "/memory":
                     if not memory_store.enabled:
@@ -651,25 +902,31 @@ async def run_agent_loop(settings: Settings) -> None:
                     else:
                         _console.print("  [dim]No active session.[/]")
 
-                elif user_input == "/prompts":
-                    table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
-                    table.add_column("", style="green")
-                    table.add_column("Prompt", style="bold")
-                    table.add_column("Order", style="dim")
-                    table.add_column("Description", style="dim")
-                    for line in prompt_engine.summary().split("\n"):
-                        flag = "✓" if "✓" in line else "✗"
-                        rest = line.replace("[✓]", "").replace("[✗]", "").strip()
-                        parts = rest.split("(order=")
-                        title = parts[0].strip()
-                        order = parts[1].rstrip(")") if len(parts) > 1 else ""
-                        desc = ""
-                        for frag in prompt_engine.fragments:
-                            if frag.title == title:
-                                desc = frag.description
-                                break
-                        table.add_row(flag, title, order, desc)
-                    _console.print(table)
+                elif user_input.startswith("/prompts"):
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) == 2:
+                        frag = prompt_engine.get_fragment(parts[1])
+                        if frag:
+                            display_content = frag.content
+                            if "{tools}" in display_content and tool_lines:
+                                display_content = display_content.replace(
+                                    "{tools}", "\n".join(f"- {d}" for d in tool_lines)
+                                )
+                            _console.print(f"  [bold cyan][{frag.id}][/] [bold]{frag.title}[/]")
+                            _console.print(Syntax(display_content, "markdown", word_wrap=True))
+                        else:
+                            _console.print(f"  [yellow]Prompt '{parts[1]}' not found[/]")
+                    else:
+                        table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+                        table.add_column("", style="green")
+                        table.add_column("ID", style="cyan", no_wrap=True)
+                        table.add_column("Prompt", style="bold")
+                        table.add_column("Order", style="dim")
+                        table.add_column("Description", style="dim")
+                        for frag in sorted(prompt_engine.fragments, key=lambda f: f.order):
+                            flag = "✓" if frag.enabled else "✗"
+                            table.add_row(flag, frag.id, frag.title, str(frag.order), frag.description)
+                        _console.print(table)
 
                 elif user_input == "/help":
                     table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
@@ -680,7 +937,7 @@ async def run_agent_loop(settings: Settings) -> None:
                     table.add_row("/cost", "Show session token cost")
                     table.add_row("/report", "Show all-session cost report vs official pricing")
                     table.add_row("/stats", "Show context stats")
-                    table.add_row("/prompts", "List enabled/disabled prompt fragments")
+                    table.add_row("/prompts", "List prompts, or '/prompts <id>' to view raw content")
                     table.add_row("/graph", "Show project symbol map")
                     table.add_row("/sessions", "List saved chat sessions")
                     table.add_row("/resume", "Load most recent session")
@@ -688,7 +945,7 @@ async def run_agent_loop(settings: Settings) -> None:
                     table.add_row("/load id", "Load a past session by ID")
                     table.add_row("/flash", "Switch to flash model (cheap)")
                     table.add_row("/pro", "Switch to pro model (powerful)")
-                    table.add_row("/mode", "Auto model selection")
+                    table.add_row("/mode", "Toggle agent/oneshot mode, use '/mode agent' or '/mode oneshot'")
                     table.add_row("/memory", "Show Mnemosyne memory status")
                     table.add_row("/nocompress", "Toggle no-compress mode for this session")
                     table.add_row("/exit", "Exit")
@@ -726,7 +983,13 @@ async def run_agent_loop(settings: Settings) -> None:
             current_model_name = client.switch_model(model_mode)
 
             await display.begin()
-            while turn < settings.max_tool_iterations:
+
+            _skip_agent = False
+            if agent_mode.is_oneshot():
+                await _run_oneshot()
+                _skip_agent = True
+
+            while not _skip_agent and turn < settings.max_tool_iterations:
                 _rebuild_graph_if_dirty()
                 if turn == 0:
                     cur_hash = hash(str(ctx.get_stable_prefix()))
@@ -997,11 +1260,12 @@ async def run_agent_loop(settings: Settings) -> None:
                         await display.end()
                     break
             else:
-                await display.end()
-                _console.print("  [yellow]⚠[/] Reached max tool iterations")
-                ctx.rollback_draft()
-                if turn > 0:
-                    turn -= 1
+                if not _skip_agent:
+                    await display.end()
+                    _console.print("  [yellow]⚠[/] Reached max tool iterations")
+                    ctx.rollback_draft()
+                    if turn > 0:
+                        turn -= 1
 
             turn_records = token_counter.records[turn_start_idx:]
             summary_in = sum(r.input_tokens for r in turn_records)
@@ -1091,6 +1355,11 @@ async def run_agent_loop(settings: Settings) -> None:
 
 
 def main() -> None:
+    _ensure_command()
+    if "--web" in sys.argv:
+        from webui.server import main as web_main
+        web_main()
+        return
     settings = Settings()
     if settings.provider == "openai" and not settings.openai_api_key:
         print(

@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     github_token: str = ""
     github_base_url: str = "https://api.github.com"
 
+    max_depth: int = -1
+
     mnemosyne_enabled: bool = True
     mnemosyne_bank: str = "dekacode"
     mnemosyne_embedding_model: str = "BAAI/bge-small-en-v1.5"

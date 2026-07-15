@@ -53,6 +53,12 @@ class LLMClient:
         self.base_url = self._providers["flash"]["base_url"]
         self.api_key = self._providers["flash"]["api_key"]
 
+    def list_models(self) -> list[dict]:
+        return [
+            {"id": k, "label": k.capitalize(), "model": v["model"]}
+            for k, v in self._providers.items()
+        ]
+
     def switch_model(self, mode: str) -> str:
         cfg = self._providers.get(mode, self._providers["flash"])
         self.model = cfg["model"]

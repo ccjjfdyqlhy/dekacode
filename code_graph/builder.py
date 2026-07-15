@@ -5,8 +5,9 @@ from code_graph.symbol import CallGraph, Symbol
 
 
 class GraphBuilder:
-    def __init__(self, project_root: str):
+    def __init__(self, project_root: str, max_depth: int = -1):
         self.project_root = os.path.abspath(project_root)
+        self.max_depth = max_depth
 
     def build(self) -> CallGraph:
         graph = CallGraph()
@@ -20,7 +21,11 @@ class GraphBuilder:
 
     def _find_py_files(self) -> list[str]:
         results = []
-        for root, _dirs, files in os.walk(self.project_root):
+        root_depth = self.project_root.rstrip(os.sep).count(os.sep)
+        for root, dirs, files in os.walk(self.project_root):
+            depth = root.rstrip(os.sep).count(os.sep) - root_depth
+            if self.max_depth >= 0 and depth >= self.max_depth:
+                dirs.clear()
             if ".git" in root or "__pycache__" in root or ".dekacode" in root:
                 continue
             for f in files:
