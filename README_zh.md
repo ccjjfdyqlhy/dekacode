@@ -1,4 +1,6 @@
-# Dekacode V0.2.4
+<p align="center">
+  <img src="dekacode.png" alt="Dekacode">
+</p>
 
 **极致省 Token 的终端 AI 编程助手。**
 

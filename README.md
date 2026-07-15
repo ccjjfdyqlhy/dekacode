@@ -1,6 +1,8 @@
-# Dekacode V0.2.4
+<p align="center">
+  <img src="dekacode.png" alt="Dekacode">
+</p>
 
-[简体中文](https://github.com/ccjjfdyqlhy/dekacode/blob/main/README_zh.md)
+[简体中文](README_zh.md)
 
 **Token-efficient AI coding agent for your terminal.**
 
