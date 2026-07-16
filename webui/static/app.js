@@ -81,8 +81,9 @@ function handleMessage(data) {
       isProcessing = false;
       if (currentAssistantEl) {
         const st = currentAssistantEl.querySelector('.status-text');
-        if (st && st.textContent && st.textContent !== '') {
-          st.textContent = 'Done';
+        if (st) {
+          const count = currentAssistantEl.querySelectorAll('.tool-result-item').length;
+          st.textContent = count > 0 ? `${count} tasks done` : 'Done';
         }
       }
       break;
@@ -708,8 +709,12 @@ function restoreChatFromStorage() {
     if (last && last.html) {
       sessionId = last.id;
       messagesEl().innerHTML = last.html;
-      document.querySelectorAll('.thinking-details .status-text').forEach(el => {
-        if (el.textContent && el.textContent !== 'Done') el.textContent = 'Done';
+      document.querySelectorAll('.thinking-details').forEach(d => {
+        const st = d.querySelector('.status-text');
+        if (st) {
+          const count = d.querySelectorAll('.tool-result-item').length;
+          st.textContent = count > 0 ? `${count} tasks done` : 'Done';
+        }
       });
       hasSentMessage = true;
       hideWelcome();
@@ -756,8 +761,12 @@ function restoreSession(idx) {
   sessionId = s.id;
   messagesEl().innerHTML = s.html;
   // Mark all thinking-details status as Done
-  document.querySelectorAll('.thinking-details .status-text').forEach(el => {
-    if (el.textContent && el.textContent !== 'Done') el.textContent = 'Done';
+  document.querySelectorAll('.thinking-details').forEach(d => {
+    const st = d.querySelector('.status-text');
+    if (st) {
+      const count = d.querySelectorAll('.tool-result-item').length;
+      st.textContent = count > 0 ? `${count} tasks done` : 'Done';
+    }
   });
   hasSentMessage = true;
   hideWelcome();

@@ -4,47 +4,47 @@
 
 [简体中文](README_zh.md)
 
-**Token-efficient AI coding agent for your terminal.**
+**Token-efficient AI coding agent for your terminal — with a Web UI.**
 
-Dekacode runs in your terminal as an AI software engineering assistant. It understands natural language instructions and autonomously performs file operations, shell commands, code analysis, and symbol navigation — all through LLM tool-calling. Every architectural decision targets **token efficiency**: minimal context, aggressive caching, speculative pre-fetching, and smart model routing.
+Dekacode is an AI software engineering assistant that runs in your terminal or browser. It understands natural language instructions and autonomously performs file operations, shell commands, code analysis, and symbol navigation through LLM tool-calling.
 
-![demo](demo.png)
-
-```
-∑ 2.5M in  ↓ 19.5K out  │ ¥0.1295  │ 202.7s
-Context 5.8%  Cache 100%  Output 0.2%  │ 202.7s
-```
-
-🧮 **Cost Verification**
-
-| Item | Calculation | Value |
-|------|------------|-------|
-| Output cost | 19.5K × ¥2/1M | ¥0.039 |
-| Actual input cost | ¥0.1295 − ¥0.039 | ¥0.0905 |
-| Implied input unit price | ¥0.0905 ÷ 2.5M | **¥0.036/1M** |
-
-This proves: as long as the request is large enough (>2M tokens) and the prefix achieves 100% cache hit, DeepSeek-V4-Flash (and other cache-supporting models) enters a **"marginal cost approaches zero"** ultra-economic zone. For bulk code analysis tasks, merging them into a single large request is far more cost-effective than splitting them into multiple smaller ones.
+Every architectural decision targets **token efficiency**: minimal context, aggressive caching, speculative pre-fetching, and smart model routing.
 
 ---
 
 ## Features
 
+### Core Engine
 - **Tool-calling agent** — 20+ built-in tools: read/write files, execute bash, glob, grep, fetch URLs, search symbols, check Python syntax, diff files, edit code, and more
 - **AST call graph** — full-project symbol index with caller/callee chain traversal; 140+ symbols indexed in ~0.01s
-- **Token-first architecture**
-  - Append-only context loop + fixed prefix → maximizes DeepSeek V4 prefix cache hits (cost as low as ¥0.025/1M tokens)
-  - Speculative pre-fetch: extracts undefined symbols from error output and auto-injects source code
-  - `[FETCH:Class:Name]` placeholder protocol — model requests symbol definitions on demand
-  - RTK output filters: strips ANSI codes, timestamps, UUIDs from bash/grep output (reduces tool output 60–90%)
+- **Agent / One-Shot modes** — interactive multi-turn agent or directive-based one-shot execution with `@req`, `@sym`, `@grep`, `@ls`, `@tree`
 - **Dual-model routing** — Flash (cheap) for simple tasks, Pro (powerful) for complex ones; auto-downgrade during peak hours
 - **Extended analysis toolkit** — batch execution, symbol location, code diagnosis, project summarization, dependency mapping, snapshots, incremental git analysis
+
+### Token-First Architecture
+- **Append-only context loop + fixed prefix** — maximizes prefix cache hits (cost as low as ¥0.025/1M tokens)
+- **Speculative pre-fetch** — extracts undefined symbols from error output and auto-injects source code
+- **[FETCH:Class:Name] placeholder protocol** — model requests symbol definitions on demand
+- **RTK output filters** — strips ANSI codes, timestamps, UUIDs from bash/grep output (reduces tool output 60–90%)
+
+### User Interfaces
 - **Rich terminal UI** — Markdown rendering, syntax highlighting, live status spinner with per-operation timing and progress bar
-- **Web UI** — FastAPI-based web interface with collapsible sidebar, real-time execution panel, model/mode switcher, and floating input
-- **Session persistence** — SQLite-backed conversation history with `/resume` to restore previous sessions
+- **Web UI** — FastAPI-based browser interface at port 8080:
+  - Collapsible sidebar with session management
+  - Real-time execution panel showing current tool progress
+  - In-message thinking details with per-tool status and args
+  - Model switcher (Flash / Pro / OpenAI) with underlying model names
+  - Mode slider (Agent / OneShot)
+  - Floating glassmorphism input box with send & model buttons
+  - Token/cost/time summary per AI response
+  - Session persistence across page reloads
+
+### Infrastructure
+- **Session persistence** — SQLite-backed conversation history; browser sessions survive page reload
 - **Modular prompts** — YAML front-matter fragments (`enabled: true/false`, `order:`) for flexible system prompt composition
 - **File watcher** — detects source changes and incrementally rebuilds the call graph
 - **Cost observability** — per-call token/cache/cost tracking with session budget limits
-- **Duration predictor** — OLS-based request latency prediction for smarter progress display
+- **Duration predictor** — OLS-based request latency prediction for progress display
 - **Cache warmer** — keepalive requests during idle to prevent server-side prefix cache eviction
 - **Provider-agnostic** — works with any OpenAI-compatible API: DeepSeek, OpenAI, ZhiPu, LM Studio (local), etc.
 
@@ -53,7 +53,6 @@ This proves: as long as the request is large enough (>2M tokens) and the prefix 
 ## Quick Start
 
 ### Requirements
-
 - Python 3.12+
 - An OpenAI-compatible API endpoint
 
@@ -65,7 +64,7 @@ pip install -r requirements.txt
 cp .env.example .env   # edit with your API keys
 ```
 
-Dependencies: `pydantic>=2.0`, `pydantic-settings>=2.0`, `httpx>=0.27`, `prompt_toolkit>=3.0`, `rich>=13.0`
+Dependencies: `pydantic>=2.0`, `pydantic-settings>=2.0`, `httpx>=0.27`, `prompt_toolkit>=3.0`, `rich>=13.0`, `fastapi>=0.100`, `uvicorn>=0.20`
 
 ### Configure
 
@@ -84,15 +83,39 @@ See `.env.example` for all options (dual API keys, provider switching, session l
 
 ```bash
 cd /your/project
-python /path/to/dekacode/main.py          # TUI mode
-python /path/to/dekacode/main.py --web    # Web UI mode (port 8080)
+python /path/to/dekacode/main.py          # Terminal UI
+python /path/to/dekacode/main.py --web    # Web UI at http://localhost:8080
 ```
 
 ---
 
-## Usage
+## Web Interface
 
-### Commands
+When launched with `--web`, Dekacode serves a full browser-based chat interface:
+
+- **Sidebar** — collapsible panel with session list, mode/model info, and options
+- **Chat area** — centered message pane with AI and user messages, markdown rendering (tables, code blocks, headings, lists, HR), and per-response token/cost/time summaries
+- **Execution panel** — floating glass panel above the input showing real-time tool progress (spinner + status + elapsed time)
+- **Thinking details** — collapsible in-message sections that record each tool call with status icons and arguments
+- **Input area** — floating glassmorphism textarea with:
+  - `Enter` to send, `Ctrl+Enter` for newline
+  - Model selector button (shows current mode + model, e.g. "Agent Flash")
+  - Model panel with mode slider (Agent / OneShot / anaii locked) and model picker with underlying API model names
+- **Session management** — saves conversations locally, restores on page reload, persists across new sessions
+
+### API Endpoints
+
+| Path | Description |
+|------|-------------|
+| `/ws` | WebSocket for chat messages, tool calls, mode switching |
+| `/api/status` | Current model, project path, symbol/files count |
+| `/api/models` | Available models with active state |
+| `/api/commands` | Slash command list |
+| `/api/balance` | Account balance (if supported) |
+
+---
+
+## Terminal Commands
 
 | Command | Description |
 |---------|-------------|
@@ -108,11 +131,11 @@ python /path/to/dekacode/main.py --web    # Web UI mode (port 8080)
 | `/undo` | Undo the last turn |
 | `/flash` | Switch to flash model (cheap) |
 | `/pro` | Switch to pro model (powerful) |
-| `/mode` | Auto / oneshot mode |
+| `/mode` | Toggle agent / oneshot mode |
 | `/help` | Show all commands |
 | `/exit` | Exit |
 
-### Examples
+### Usage Examples
 
 ```
  > Show me the architecture of this project
@@ -185,6 +208,8 @@ prompts/                    YAML front-matter prompt fragments
 ├── jianyan.md              Ultra-concise speech mode
 ├── overview.md             Project overview protocol
 ├── placeholders.md         [FETCH:] protocol instructions
+├── oneshot_gather.md       One-shot gather phase prompt
+├── oneshot_execute.md      One-shot execute phase prompt
 └── terse.md                Token-saving hints (disabled by default)
 ```
 

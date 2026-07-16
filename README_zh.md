@@ -2,43 +2,43 @@
   <img src="dekacode.png" alt="Dekacode" width="480">
 </p>
 
-**极致省 Token 的终端 AI 编程助手。**
+**极致省 Token 的终端 AI 编程助手 — 还有 Web 界面。**
 
-Dekacode 运行在终端中，作为 AI 软件工程助手。它能理解自然语言指令，通过 LLM 工具调用自动执行文件操作、Shell 命令、代码分析和符号导航。所有架构决策以 **Token 效率** 为优先：最小化上下文、激进缓存、推测性预取、智能模型路由。
+Dekacode 运行在终端或浏览器中，作为 AI 软件工程助手。它能理解自然语言指令，通过 LLM 工具调用自动执行文件操作、Shell 命令、代码分析和符号导航。
 
-![demo](demo.png)
-
-```
-∑ 2.5M in  ↓ 19.5K out  │ ¥0.1295  │ 202.7s
-Context 5.8%  Cache 100%  Output 0.2%  │ 202.7s
-```
-
-🧮 **成本反推验证**
-
-| 项目 | 计算 | 结果 |
-|------|------|------|
-| 输出成本 | 19.5K × ¥2/百万 | ¥0.039 |
-| 实际输入成本 | ¥0.1295 − ¥0.039 | ¥0.0905 |
-| 反推输入单价 | ¥0.0905 ÷ 2.5M | **¥0.036/百万** |
-
-它用事实证明了：只要请求足够大（>200 万 tokens）且确保前缀 100% 命中缓存，DeepSeek-V4-Flash（以及其他支持缓存的模型）的计费会进入一个 **"边际成本无限趋近于零"** 的超经济区间。以后如果有大批量代码分析任务，放心地合并成大请求一次性提交，性价比会远高于拆分多次。
+所有架构决策以 **Token 效率** 为优先：最小化上下文、激进缓存、推测性预取、智能模型路由。
 
 ---
 
 ## 特性
 
+### 核心引擎
 - **Tool-calling Agent** — 20+ 内置工具：读写文件、执行 bash、glob 搜索、grep、抓取 URL、符号搜索、Python 语法检查、diff 文件、编辑代码等
 - **AST 调用图** — 全项目符号索引，支持上下级调用链追踪；140+ 符号索引仅需 ~0.01s
-- **Token 优先架构**
-  - Append-Only 上下文 + 固定前缀 → 最大化 DeepSeek V4 前缀缓存命中（最低 ¥0.025/百万 tokens）
-  - 推测性预取（Speculative Pre-fetch）：从错误输出中自动解析未定义符号并注入源码
-  - `[FETCH:Class:Name]` 占位符协议：模型按需请求符号定义
-  - RTK 输出过滤：去除 ANSI 颜色码、时间戳、UUID（工具输出减少 60–90%）
+- **Agent / One-Shot 双模式** — 交互式多轮 Agent 或基于 @ 指令的一次性执行（`@req`、`@sym`、`@grep`、`@ls`、`@tree`）
 - **双模型路由** — Flash（便宜）处理简单任务，Pro（强大）处理复杂任务；高峰时段自动降级
 - **扩展分析工具集** — 批量执行、符号定位、代码诊断、项目摘要、依赖映射、快照、增量 Git 分析
+
+### Token 优先架构
+- **Append-Only 上下文 + 固定前缀** — 最大化 DeepSeek V4 前缀缓存命中（最低 ¥0.025/百万 tokens）
+- **推测性预取（Speculative Pre-fetch）** — 从错误输出中自动解析未定义符号并注入源码
+- **`[FETCH:Class:Name]` 占位符协议** — 模型按需请求符号定义
+- **RTK 输出过滤** — 去除 ANSI 颜色码、时间戳、UUID（工具输出减少 60–90%）
+
+### 用户界面
 - **Rich 终端界面** — Markdown 渲染、语法高亮、实时状态动画（含进度条和计时）
-- **Web UI** — FastAPI 网页界面，可折叠侧栏、实时执行面板、模型/模式切换器、浮动输入框
-- **会话持久化** — SQLite 存储聊天记录，`/resume` 一键恢复
+- **Web UI** — FastAPI 网页界面（端口 8080）：
+  - 可折叠侧栏，支持会话管理
+  - 实时执行面板，动态显示工具进度
+  - 消息内思考详情，记录每个工具调用的状态和参数
+  - 模型切换器（Flash / Pro / OpenAI），显示底层 API 模型名
+  - 模式滑杆（Agent / OneShot）
+  - 浮动毛玻璃输入框，带发送和模型切换按钮
+  - 每次 AI 回复后展示 Token/费用/耗时摘要
+  - 会话持久化，刷新不丢聊天记录
+
+### 基础设施
+- **会话持久化** — SQLite 存储聊天记录；浏览器端会话刷新不丢失
 - **模块化提示词** — YAML 前注片段（`enabled: true/false`、`order:`），灵活组合 system prompt
 - **文件监听** — 检测源码变更并增量重建调用图
 - **成本可观测** — 每次调用追踪 token/缓存/花费，支持会话预算上限
@@ -51,7 +51,6 @@ Context 5.8%  Cache 100%  Output 0.2%  │ 202.7s
 ## 快速开始
 
 ### 环境要求
-
 - Python 3.12+
 - OpenAI 兼容 API 端点
 
@@ -63,7 +62,7 @@ pip install -r requirements.txt
 cp .env.example .env   # 编辑你的 API 密钥
 ```
 
-依赖项：`pydantic>=2.0`、`pydantic-settings>=2.0`、`httpx>=0.27`、`prompt_toolkit>=3.0`、`rich>=13.0`
+依赖项：`pydantic>=2.0`、`pydantic-settings>=2.0`、`httpx>=0.27`、`prompt_toolkit>=3.0`、`rich>=13.0`、`fastapi>=0.100`、`uvicorn>=0.20`
 
 ### 配置
 
@@ -82,15 +81,39 @@ PRO_MODEL=deepseek-v4-pro
 
 ```bash
 cd /your/project
-python /path/to/dekacode/main.py          # TUI 模式
-python /path/to/dekacode/main.py --web    # Web UI 模式（端口 8080）
+python /path/to/dekacode/main.py          # 终端界面
+python /path/to/dekacode/main.py --web    # Web 界面 → http://localhost:8080
 ```
 
 ---
 
-## 使用
+## Web 界面
 
-### 命令
+使用 `--web` 参数启动后会提供完整的浏览器聊天界面：
+
+- **侧栏** — 可折叠，包含会话列表、模式/模型信息、设置选项
+- **聊天区** — 居中消息面板，支持 Markdown 渲染（表格、代码块、标题、列表、分隔线），每条 AI 回复附带 Token/费用/耗时摘要
+- **执行面板** — 输入框上方浮动毛玻璃面板，实时显示工具进度（旋转图标 + 状态文字 + 计时）
+- **思考详情** — 消息内可折叠区域，记录每个工具调用的状态图标和参数详情
+- **输入框** — 浮动毛玻璃文本域：
+  - `Enter` 发送，`Ctrl+Enter` 换行
+  - 模型选择按钮（显示当前模式+模型，如 "Agent Flash"）
+  - 弹出面板包含模式滑杆（Agent / OneShot / anaii 锁定）和模型列表（显示底层 API 模型名）
+- **会话管理** — 本地存储聊天记录，刷新页面自动恢复，新建会话不丢失历史
+
+### API 端点
+
+| 路径 | 说明 |
+|------|------|
+| `/ws` | WebSocket 聊天消息、工具调用、模式切换 |
+| `/api/status` | 当前模型、项目路径、符号/文件数 |
+| `/api/models` | 可用模型列表及选中状态 |
+| `/api/commands` | 斜杠命令列表 |
+| `/api/balance` | 账户余额（如 API 支持） |
+
+---
+
+## 终端命令
 
 | 命令 | 说明 |
 |------|------|
@@ -106,11 +129,11 @@ python /path/to/dekacode/main.py --web    # Web UI 模式（端口 8080）
 | `/undo` | 撤销上一轮 |
 | `/flash` | 切换到 Flash 模型（便宜） |
 | `/pro` | 切换到 Pro 模型（强大） |
-| `/mode` | 自动模型选择 |
+| `/mode` | 切换 Agent / OneShot 模式 |
 | `/help` | 显示所有命令 |
 | `/exit` | 退出 |
 
-### 示例
+### 使用示例
 
 ```
  > 看一下这个项目
@@ -183,6 +206,8 @@ prompts/                     YAML 前注提示词片段
 ├── jianyan.md               极度精简语言模式
 ├── overview.md              项目总览协议
 ├── placeholders.md          [FETCH:] 协议说明
+├── oneshot_gather.md        One-Shot 收集阶段提示词
+├── oneshot_execute.md       One-Shot 执行阶段提示词
 └── terse.md                 Token 节省提示（默认禁用）
 ```
 
