@@ -33,23 +33,23 @@
     </div>
   </div>
   <div id="main">
-    <div id="messages"></div>
-    <div id="welcome">
+    <div id="welcome" style="display:flex">
       <img src="/logo.png" alt="Dekacode" class="welcome-logo" id="welcomeLogo">
       <div class="welcome-text">How can I help you?</div>
       <div class="welcome-project" id="welcomeProject"></div>
     </div>
-    <div id="executionPanel" class="execution-panel" style="display:none">
-      <div class="ep-header" onclick="toggleExecutionPanel(this)">
-        <span class="spinner-small ep-spinner"></span>
-        <span class="arrow">&#x25B6;</span>
-        <span class="ep-status" id="execStatus">Thinking</span>
-        <span class="ep-elapsed" id="execElapsed"></span>
-        <button class="ep-stop" id="execStopBtn" onclick="event.stopPropagation();stopGeneration()">&#x25A0;</button>
-      </div>
-      <div class="ep-body" id="execBody"></div>
-    </div>
+    <div id="messages"></div>
     <div id="inputArea">
+      <div id="executionPanel" class="execution-panel" style="display:none">
+        <div class="ep-header" onclick="toggleExecutionPanel(this)">
+          <span class="spinner-small ep-spinner"></span>
+          <span class="arrow">&#x25B6;</span>
+          <span class="ep-status" id="execStatus">Thinking</span>
+          <span class="ep-elapsed" id="execElapsed"></span>
+          <button class="ep-stop" id="execStopBtn" onclick="event.stopPropagation();stopGeneration()">&#x25A0;</button>
+        </div>
+        <div class="ep-body" id="execBody"></div>
+      </div>
       <div id="inputBar">
         <div id="cmdPanel" class="cmd-panel" style="display:none"></div>
         <textarea id="input" rows="1" placeholder="Type a message... (Enter to send, Ctrl+Enter newline, / for commands)"></textarea>

@@ -49,33 +49,32 @@ function handleMessage(data) {
         currentAssistantEl = createAssistantMessage();
         const details = document.createElement('div');
         details.className = 'thinking-details';
-        details.id = 'thinkingDetails';
         details.innerHTML = `
           <div class="thinking-details-header" onclick="toggleThinkingDetails(this)">
             <span class="arrow">&#x25B6;</span>
-            <span class="status-text" id="thinkingStatusText">${escapeHtml(data.status || 'Thinking')}</span>
+            <span class="status-text">${escapeHtml(data.status || 'Thinking')}</span>
           </div>
-          <div class="thinking-details-body" id="thinkingDetailsBody"></div>
+          <div class="thinking-details-body"></div>
         `;
         currentAssistantEl.appendChild(details);
       } else {
-        const st = document.getElementById('thinkingStatusText');
+        const st = currentAssistantEl.querySelector('.status-text');
         if (st) st.textContent = data.status || 'Thinking';
       }
       break;
 
     case 'thinking_status':
       updateThinkingBar(data.status || '');
-      {
-        const st = document.getElementById('thinkingStatusText');
+      if (currentAssistantEl) {
+        const st = currentAssistantEl.querySelector('.status-text');
         if (st) st.textContent = data.status || '';
       }
       break;
 
     case 'thinking_done':
       hideThinkingBar();
-      {
-        const st = document.getElementById('thinkingStatusText');
+      if (currentAssistantEl) {
+        const st = currentAssistantEl.querySelector('.status-text');
         if (st && st.textContent && st.textContent !== '') {
           st.textContent = 'Done';
         }
@@ -89,8 +88,8 @@ function handleMessage(data) {
 
     case 'tool_result':
       updateToolResult(data.id, data.name, data.success, data.content);
-      {
-        const item = document.querySelector(`.tool-result-item[data-call-id="${data.id}"]`);
+      if (currentAssistantEl) {
+        const item = currentAssistantEl.querySelector(`.tool-result-item[data-call-id="${data.id}"]`);
         if (item) {
           const icon = item.querySelector('.status-icon');
           if (icon) icon.textContent = data.success ? '\u2705' : '\u274C';
@@ -102,10 +101,12 @@ function handleMessage(data) {
       if (data.results) {
         data.results.forEach(r => {
           updateToolResult(r.id, r.name, true, r.content);
-          const item = document.querySelector(`.tool-result-item[data-call-id="${r.id}"]`);
-          if (item) {
-            const icon = item.querySelector('.status-icon');
-            if (icon) icon.textContent = '\u2705';
+          if (currentAssistantEl) {
+            const item = currentAssistantEl.querySelector(`.tool-result-item[data-call-id="${r.id}"]`);
+            if (item) {
+              const icon = item.querySelector('.status-icon');
+              if (icon) icon.textContent = '\u2705';
+            }
           }
         });
       }
@@ -178,7 +179,7 @@ function createAssistantMessage() {
 
 function hideWelcome() {
   const w = welcomeEl();
-  if (w) w.style.display = 'none';
+  if (w) w.style.display = "none";
 }
 
 // ─── Execution Panel (replaces thinking bar) ─────────────────────
@@ -232,8 +233,25 @@ function toggleThinkingDetails(header) {
 }
 
 function addToolCallsToThinking(calls) {
-  const body = document.getElementById('thinkingDetailsBody');
-  if (!body) return;
+  let body;
+  if (currentAssistantEl) {
+    body = currentAssistantEl.querySelector('.thinking-details-body');
+  }
+  if (!body) {
+    if (!currentAssistantEl) currentAssistantEl = createAssistantMessage();
+    const details = document.createElement('div');
+    details.className = 'thinking-details';
+    details.innerHTML = `
+      <div class="thinking-details-header" onclick="toggleThinkingDetails(this)">
+        <span class="arrow">&#x25B6;</span>
+        <span class="status-text">Thinking</span>
+      </div>
+      <div class="thinking-details-body"></div>
+    `;
+    currentAssistantEl.appendChild(details);
+    body = currentAssistantEl.querySelector('.thinking-details-body');
+    if (!body) return;
+  }
   for (const call of calls) {
     const item = document.createElement('div');
     item.className = 'tool-result-item';
@@ -552,7 +570,7 @@ function toggleMode() {
 function clearChat() {
   messagesEl().innerHTML = '';
   currentAssistantEl = null;
-  document.getElementById('thinkingBar').style.display = 'none';
+  document.getElementById('executionPanel').style.display = 'none';
   setSendButtonStop(false);
   hasSentMessage = false;
   showWelcome();
@@ -563,11 +581,12 @@ function clearChat() {
 function newSession() {
   messagesEl().innerHTML = '';
   currentAssistantEl = null;
-  document.getElementById('thinkingBar').style.display = 'none';
+  document.getElementById('executionPanel').style.display = 'none';
   setSendButtonStop(false);
   hasSentMessage = false;
   isProcessing = false;
-  showWelcome();
+  const w = document.getElementById('welcome');
+  if (w) w.style.display = 'flex';
   input.focus();
 }
 
@@ -645,7 +664,7 @@ function restoreChatFromStorage() {
 
 function showWelcome() {
   const w = welcomeEl();
-  if (w) w.style.display = 'flex';
+  if (w) w.style.display = "";
 }
 
 // ─── Session List ─────────────────────────────────────────────────
@@ -674,7 +693,7 @@ function restoreSession(idx) {
   hasSentMessage = true;
   hideWelcome();
   currentAssistantEl = null;
-  document.getElementById('thinkingBar').style.display = 'none';
+  document.getElementById('executionPanel').style.display = 'none';
   setSendButtonStop(false);
   isProcessing = false;
 }

@@ -275,7 +275,8 @@ html, body {
 /* ─── Messages ─── */
 
 #messages {
-  flex: 1;
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
   overflow-y: auto;
   padding: 16px 20px 200px;
   scroll-behavior: smooth;
@@ -437,9 +438,9 @@ html, body {
 .execution-panel {
   position: absolute;
   bottom: 100%;
-  left: 20px;
-  right: 20px;
-  margin-bottom: 4px;
+  left: 0;
+  right: 0;
+  margin-bottom: 6px;
   z-index: 9;
   background: rgba(10, 10, 15, 0.8);
   backdrop-filter: blur(12px);
@@ -513,7 +514,6 @@ html, body {
 /* ─── Welcome ─── */
 
 #welcome {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -522,7 +522,11 @@ html, body {
   padding: 40px 20px 160px;
   user-select: none;
   pointer-events: none;
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 5;
 }
+
 
 .welcome-logo {
   max-width: 60%;
