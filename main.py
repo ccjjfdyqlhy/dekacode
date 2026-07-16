@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "V0.2.4"
+VERSION = "V0.2.5"
 
 _DEKACODE_DIR = os.path.dirname(os.path.abspath(__file__))
 

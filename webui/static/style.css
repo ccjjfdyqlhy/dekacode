@@ -431,7 +431,14 @@ html, body {
 }
 .tool-result-item:first-child { border-top: none; }
 .tool-result-item .status-icon { font-size: 13px; flex-shrink: 0; }
-.tool-result-item .tool-name { color: var(--cyan); font-weight: 600; }
+.tool-result-item .tool-name { color: var(--cyan); font-weight: 600; flex-shrink: 0; }
+.tool-result-item .tool-detail {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ─── Execution Panel (live above input) ─── */
 
@@ -440,15 +447,17 @@ html, body {
   bottom: 100%;
   left: 0;
   right: 0;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   z-index: 9;
   background: rgba(10, 10, 15, 0.8);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 10px 10px 0 0;
+  border-bottom: none;
   overflow: hidden;
   animation: slideUp 0.15s ease;
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.3);
 }
 
 @keyframes slideUp {
@@ -479,20 +488,7 @@ html, body {
 .ep-elapsed { color: var(--text-muted); font-size: 11px; }
 .ep-spinner { flex-shrink: 0; }
 
-.ep-stop {
-  background: var(--red);
-  color: white;
-  border: none;
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-family: var(--font);
-  font-size: 11px;
-  cursor: pointer;
-  transition: opacity 0.15s;
-  flex-shrink: 0;
-  line-height: 1.4;
-}
-.ep-stop:hover { opacity: 0.8; }
+
 
 .ep-body { display: none; }
 .ep-body.open { display: block; border-top: 1px solid var(--border); }

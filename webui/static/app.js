@@ -68,11 +68,17 @@ function handleMessage(data) {
       if (currentAssistantEl) {
         const st = currentAssistantEl.querySelector('.status-text');
         if (st) st.textContent = data.status || '';
+        const lastItem = currentAssistantEl.querySelector('.tool-result-item:last-child .tool-detail');
+        if (lastItem && data.status) {
+          const parts = data.status.split(' ');
+          if (parts.length > 1) lastItem.textContent = parts.slice(1).join(' ');
+        }
       }
       break;
 
     case 'thinking_done':
       hideThinkingBar();
+      isProcessing = false;
       if (currentAssistantEl) {
         const st = currentAssistantEl.querySelector('.status-text');
         if (st && st.textContent && st.textContent !== '') {
@@ -170,7 +176,6 @@ function createAssistantMessage() {
   const div = document.createElement('div');
   div.className = 'message message-assistant';
   div.id = `msg-${++messageId}`;
-  div.innerHTML = `<div class="message-header">Dekacode</div>`;
   messagesEl().appendChild(div);
   scrollToBottom();
   saveChatToStorage();
@@ -253,12 +258,47 @@ function addToolCallsToThinking(calls) {
     if (!body) return;
   }
   for (const call of calls) {
+    let detail = '';
+    try {
+      const args = JSON.parse(call.args);
+      if (call.name === 'read_file') {
+        const p = args.filePath || '';
+        const o = args.offset;
+        const l = args.limit;
+        detail = o && l ? `${p}:${o}-${l}` : p;
+      } else if (call.name === 'write_file') {
+        detail = args.filePath || '';
+      } else if (call.name === 'edit_file') {
+        detail = args.filePath || '';
+      } else if (call.name === 'glob') {
+        detail = args.pattern || '';
+      } else if (call.name === 'grep' || call.name === 'grep_context') {
+        detail = `/${args.pattern || ''}/`;
+      } else if (call.name === 'bash') {
+        const cmd = (args.command || '').split('\n')[0];
+        detail = cmd ? `$ ${cmd.slice(0, 60)}` : '';
+      } else if (call.name === 'web_fetch') {
+        detail = args.url || '';
+      } else if (call.name === 'symbol_search') {
+        detail = args.query || '';
+      } else if (call.name === 'callers' || call.name === 'read_symbol') {
+        detail = args.symbol || '';
+      } else if (call.name === 'list_dir') {
+        detail = args.path || '';
+      } else if (call.name === 'py_check') {
+        detail = args.file_path || '';
+      } else if (call.name === 'read_files') {
+        const ps = args.paths || [];
+        detail = `${ps.length} files`;
+      }
+    } catch (e) {}
     const item = document.createElement('div');
     item.className = 'tool-result-item';
     item.dataset.callId = call.id;
     item.innerHTML = `
       <span class="status-icon">&#x23F3;</span>
       <span class="tool-name">${escapeHtml(call.name)}</span>
+      ${detail ? `<span class="tool-detail">${escapeHtml(detail)}</span>` : ''}
     `;
     body.appendChild(item);
   }
@@ -575,10 +615,11 @@ function clearChat() {
   hasSentMessage = false;
   showWelcome();
   sendJson({ type: 'message', content: '/clear' });
-  localStorage.removeItem('dekacode_chat');
 }
 
 function newSession() {
+  saveCurrentBeforeNew();
+  sessionId = _genId();
   messagesEl().innerHTML = '';
   currentAssistantEl = null;
   document.getElementById('executionPanel').style.display = 'none';
@@ -588,21 +629,24 @@ function newSession() {
   const w = document.getElementById('welcome');
   if (w) w.style.display = 'flex';
   input.focus();
+  updateSessionList();
 }
 
-let sessionCounter = 0;
+let sessionId = 'sess_' + Date.now();
 const SESSION_LIST_KEY = 'dekacode_sessions';
+
+function _genId() { return 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6); }
 
 function saveSessionToList() {
   const preview = getChatPreview();
   if (!preview || preview === 'Empty conversation') return;
   let sessions = loadSessionList();
   const ts = Date.now();
-  const existing = sessions.findIndex(s => s.id === 'current');
+  const existing = sessions.findIndex(s => s.id === sessionId);
   if (existing >= 0) {
-    sessions[existing] = { id: 'current', preview, ts, html: messagesEl().innerHTML };
+    sessions[existing] = { id: sessionId, preview, ts, html: messagesEl().innerHTML };
   } else {
-    sessions.push({ id: 'current', preview, ts, html: messagesEl().innerHTML });
+    sessions.push({ id: sessionId, preview, ts, html: messagesEl().innerHTML });
   }
   sessions = sessions.slice(-20);
   try {
@@ -616,6 +660,21 @@ function loadSessionList() {
     const raw = localStorage.getItem(SESSION_LIST_KEY);
     return raw ? JSON.parse(raw) : [];
   } catch { return []; }
+}
+
+function saveCurrentBeforeNew() {
+  const html = messagesEl().innerHTML;
+  if (!html.trim()) return;
+  let sessions = loadSessionList();
+  const existing = sessions.findIndex(s => s.id === sessionId);
+  if (existing >= 0) {
+    sessions[existing].html = html;
+    sessions[existing].ts = Date.now();
+  } else {
+    sessions.push({ id: sessionId, preview: getChatPreview() || '(chat)', ts: Date.now(), html });
+  }
+  sessions = sessions.slice(-20);
+  try { localStorage.setItem(SESSION_LIST_KEY, JSON.stringify(sessions)); } catch (e) {}
 }
 
 function optionsMenu() {
@@ -647,7 +706,11 @@ function restoreChatFromStorage() {
   if (sessions.length > 0) {
     const last = sessions[sessions.length - 1];
     if (last && last.html) {
+      sessionId = last.id;
       messagesEl().innerHTML = last.html;
+      document.querySelectorAll('.thinking-details .status-text').forEach(el => {
+        if (el.textContent && el.textContent !== 'Done') el.textContent = 'Done';
+      });
       hasSentMessage = true;
       hideWelcome();
     } else {
@@ -689,13 +752,20 @@ function restoreSession(idx) {
   const sessions = loadSessionList();
   const s = sessions[idx];
   if (!s || !s.html) return;
+  saveCurrentBeforeNew();
+  sessionId = s.id;
   messagesEl().innerHTML = s.html;
+  // Mark all thinking-details status as Done
+  document.querySelectorAll('.thinking-details .status-text').forEach(el => {
+    if (el.textContent && el.textContent !== 'Done') el.textContent = 'Done';
+  });
   hasSentMessage = true;
   hideWelcome();
   currentAssistantEl = null;
   document.getElementById('executionPanel').style.display = 'none';
   setSendButtonStop(false);
   isProcessing = false;
+  updateSessionList();
 }
 
 function getChatPreview() {
