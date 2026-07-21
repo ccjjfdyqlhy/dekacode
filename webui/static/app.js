@@ -127,6 +127,22 @@ function handleMessage(data) {
       appendAssistantText(data.content);
       break;
 
+    case 'text_delta':
+      appendAssistantTextDelta(data.content);
+      break;
+
+    case 'reasoning_delta':
+      appendReasoningDelta(data.content);
+      break;
+
+    case 'progress':
+      updateProgressBar(data.elapsed);
+      break;
+
+    case 'todo':
+      showTodoList(data.items, data.done);
+      break;
+
     case 'command_output':
       // Command responses: not from AI, reset processing immediately
       appendCommandOutput(data.content);
@@ -385,6 +401,97 @@ function appendAssistantText(text) {
   saveSessionToList();
 }
 
+function appendAssistantTextDelta(text) {
+  hideWelcome();
+  if (!currentAssistantEl) {
+    currentAssistantEl = createAssistantMessage();
+  }
+  let contentEl = currentAssistantEl.querySelector('.message-content');
+  if (!contentEl) {
+    contentEl = document.createElement('div');
+    contentEl.className = 'message-content';
+    currentAssistantEl.appendChild(contentEl);
+  }
+  let rawEl = currentAssistantEl.querySelector('.message-raw');
+  if (!rawEl) {
+    rawEl = document.createElement('div');
+    rawEl.className = 'message-raw';
+    rawEl.style.display = 'none';
+    currentAssistantEl.appendChild(rawEl);
+  }
+  rawEl.textContent += text;
+  contentEl.innerHTML = renderMarkdown(rawEl.textContent);
+  scrollToBottom();
+}
+
+function appendReasoningDelta(text) {
+  hideWelcome();
+  if (!currentAssistantEl) {
+    currentAssistantEl = createAssistantMessage();
+  }
+  let thinkingEl = currentAssistantEl.querySelector('.thinking-details');
+  if (!thinkingEl) {
+    thinkingEl = document.createElement('div');
+    thinkingEl.className = 'thinking-details';
+    const header = document.createElement('div');
+    header.className = 'thinking-details-header';
+    header.onclick = function() { toggleThinkingDetails(header); };
+    header.innerHTML = '<span class="arrow">&#x25B6;</span><span class="status-text">Thought</span>';
+    const body = document.createElement('div');
+    body.className = 'thinking-details-body';
+    body.style.display = 'none';
+    thinkingEl.appendChild(header);
+    thinkingEl.appendChild(body);
+    currentAssistantEl.appendChild(thinkingEl);
+  }
+  const body = thinkingEl.querySelector('.thinking-details-body');
+  let reasonEl = body.querySelector('.reasoning-content');
+  if (!reasonEl) {
+    reasonEl = document.createElement('div');
+    reasonEl.className = 'reasoning-content';
+    reasonEl.style.color = 'var(--text-dim)';
+    reasonEl.style.fontStyle = 'italic';
+    reasonEl.style.whiteSpace = 'pre-wrap';
+    body.appendChild(reasonEl);
+  }
+  reasonEl.textContent += text;
+  body.style.display = 'block';
+  const arrow = thinkingEl.querySelector('.arrow');
+  if (arrow) arrow.textContent = '\u25BC';
+  scrollToBottom();
+}
+
+function updateProgressBar(elapsed) {
+  const bar = document.getElementById('thinking-progress-bar');
+  if (bar) {
+    bar.textContent = elapsed + 's elapsed';
+  }
+}
+
+function showTodoList(items, done) {
+  let todoEl = document.getElementById('todo-panel');
+  if (!todoEl) {
+    todoEl = document.createElement('div');
+    todoEl.id = 'todo-panel';
+    todoEl.className = 'todo-panel';
+    const msgs = messagesEl();
+    msgs.insertBefore(todoEl, msgs.firstChild);
+  }
+  let html = '<div class="todo-header">Task Plan</div>';
+  items.forEach(item => {
+    const icon = item.status === 'completed' ? '✓' : item.status === 'in_progress' ? '⏳' : ' ';
+    let cls = item.status === 'completed' ? 'done' : item.status === 'in_progress' ? 'active' : '';
+    html += `<div class="todo-item ${cls}"><span class="todo-icon">[${icon}]</span> ${escapeHtml(item.content)}</div>`;
+  });
+  todoEl.innerHTML = html;
+  if (done) {
+    setTimeout(() => {
+      const panel = document.getElementById('todo-panel');
+      if (panel) panel.style.opacity = '0.5';
+    }, 1000);
+  }
+}
+
 function appendCommandOutput(text) {
   hideWelcome();
   currentAssistantEl = null;
@@ -418,16 +525,24 @@ function appendSummary(data) {
   if (bal && bal.balanceUsd !== undefined) {
     balanceHtml = `<span title="Balance">$${bal.balanceUsd.toFixed(2)}</span>`;
   }
-  summaryEl.innerHTML = `
-    <span title="Input tokens">↑ ${fmt(data.input_tokens)} in</span>
-    <span title="Output tokens">↓ ${fmt(data.output_tokens)} out</span>
-    <span title="Cache hit">cache ${fmt(data.cache_hit)}/${data.cache_pct}%</span>
-    <span title="Cost">¥${data.cost}</span>
-    <span title="Context usage">ctx ${data.ctx_pct}%</span>
-    <span title="Output usage">out ${data.out_pct}%</span>
-    <span title="Elapsed">${data.elapsed}s</span>
-    ${balanceHtml}
-  `;
+  if (data.usage_supported === false) {
+    summaryEl.innerHTML = `
+      <span title="Usage not available">Usage not supported</span>
+      <span title="Elapsed">${data.elapsed}s</span>
+      ${balanceHtml}
+    `;
+  } else {
+    summaryEl.innerHTML = `
+      <span title="Input tokens">↑ ${fmt(data.input_tokens)} in</span>
+      <span title="Output tokens">↓ ${fmt(data.output_tokens)} out</span>
+      <span title="Cache hit">cache ${fmt(data.cache_hit)}/${data.cache_pct}%</span>
+      <span title="Cost">¥${data.cost}</span>
+      <span title="Context usage">ctx ${data.ctx_pct}%</span>
+      <span title="Output usage">out ${data.out_pct}%</span>
+      <span title="Elapsed">${data.elapsed}s</span>
+      ${balanceHtml}
+    `;
+  }
   // Fetch balance in background
   fetch('/api/balance').then(r => r.json()).then(b => { window._balance = b; }).catch(() => {});
 }

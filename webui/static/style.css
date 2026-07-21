@@ -827,3 +827,41 @@ html, body {
   #inputArea { padding: 8px 16px 12px; }
   .message-user .bubble { max-width: 90%; }
 }
+
+/* ─── Todo Panel ─── */
+.todo-panel {
+  margin: 12px 16px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  transition: opacity 0.5s;
+}
+.todo-header {
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+.todo-item {
+  padding: 2px 0;
+  color: var(--text-dim);
+}
+.todo-item.active {
+  color: var(--text);
+  font-weight: 500;
+}
+.todo-item.done {
+  color: var(--green);
+  text-decoration: line-through;
+}
+.todo-icon {
+  margin-right: 4px;
+}
+
+/* ─── Reasoning Content ─── */
+.reasoning-content {
+  padding: 8px 0;
+  line-height: 1.5;
+}

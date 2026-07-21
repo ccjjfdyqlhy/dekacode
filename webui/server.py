@@ -13,6 +13,7 @@ import uvicorn
 from config import Settings
 from utils import LLMClient
 from skill import SkillRegistry
+from skills.todowrite import get_tracker
 from prompt_engine import PromptEngine
 from context import ContextManager
 from models import Function, Message, ToolCall
@@ -175,6 +176,12 @@ class Session:
         else:
             await self._process_agent(user_input, websocket)
 
+    async def _send_todo(self, ws: WebSocket):
+        tracker = get_tracker()
+        items = [{"content": i.content, "status": i.status, "priority": i.priority} for i in tracker.items]
+        if items:
+            await self._send(ws, type="todo", items=items, done=tracker.all_done())
+
     async def _send_summary(self, ws: WebSocket):
         records = self.engine._token_counter.records[self._rec_start:]
         if not records:
@@ -205,22 +212,61 @@ class Session:
                              out_pct=round(out_pct, 1),
                              usage_supported=True)
 
-    async def _collect_stream(self, messages, tools, model_mode, max_tokens):
+    async def _collect_stream(self, messages, tools, model_mode, max_tokens, ws=None):
         content_buf = ""
         tool_calls_buf = []
         finish_reason = None
         last_usage = None
+        _reasoning_active = False
+        t_start = time.time()
+        last_progress = t_start
         async for chunk in self.engine.client.chat_stream(
             messages, tools, model_mode=model_mode, max_tokens=max_tokens
         ):
+            if chunk.delta_reasoning:
+                if not _reasoning_active:
+                    _reasoning_active = True
+                    if ws:
+                        await self._send(ws, type="thinking_status", status="Thinking...")
+                if ws:
+                    await self._send(ws, type="reasoning_delta", content=chunk.delta_reasoning)
             if chunk.delta_content:
                 content_buf += chunk.delta_content
+                if ws:
+                    await self._send(ws, type="text_delta", content=chunk.delta_content)
             if chunk.delta_tool_calls:
                 tool_calls_buf = chunk.delta_tool_calls
+                if ws and tool_calls_buf:
+                    tc_name = tool_calls_buf[0]["function"]["name"]
+                    prep = {
+                        "bash": "Preparing command",
+                        "read_file": "Preparing read",
+                        "write_file": "Preparing write",
+                        "edit_file": "Preparing edit",
+                        "read_files": "Preparing read",
+                        "glob": "Preparing search",
+                        "grep": "Preparing search",
+                        "grep_context": "Preparing search",
+                        "list_dir": "Preparing list",
+                        "diff_file": "Preparing diff",
+                        "ast_summary": "Preparing analysis",
+                        "web_fetch": "Preparing fetch",
+                        "symbol_search": "Preparing search",
+                        "callers": "Preparing trace",
+                        "read_symbol": "Preparing read",
+                        "py_check": "Preparing check",
+                        "github": "Preparing GitHub",
+                        "todowrite": "Updating todo",
+                    }.get(tc_name, "Preparing")
+                    await self._send(ws, type="thinking_status", status=prep)
             if chunk.finish_reason:
                 finish_reason = chunk.finish_reason
             if chunk.usage:
                 last_usage = chunk.usage
+            if ws and time.time() - last_progress > 0.5:
+                elapsed = time.time() - t_start
+                await self._send(ws, type="progress", elapsed=round(elapsed, 1))
+                last_progress = time.time()
         return {
             "choices": [{
                 "message": {
@@ -257,7 +303,7 @@ class Session:
                 await self._send(websocket, type="thinking_status", status="Streaming...")
                 t0 = time.time()
                 response = await self._collect_stream(
-                    request, tools, model_mode=self.engine.model_mode, max_tokens=16384
+                    request, tools, model_mode=self.engine.model_mode, max_tokens=16384, ws=websocket
                 )
                 elapsed = time.time() - t0
             except Exception as e:
@@ -335,6 +381,8 @@ class Session:
                         await self._send(websocket, type="tool_result",
                                          id=tc.id, name=tc.function.name,
                                          success=result.success, content=text[:2000])
+                        if tc.function.name == "todowrite":
+                            await self._send_todo(websocket)
                     except json.JSONDecodeError as e:
                         text = f"[Parse Error] {e}"
                         self.ctx.add_tool_result(tc.id, tc.function.name, text)
@@ -381,7 +429,7 @@ class Session:
             await self._send(websocket, type="thinking_status", status="Streaming gather...")
             t0 = time.time()
             response = await self._collect_stream(gather_msgs, gather_tools,
-                                                  model_mode=self.engine.model_mode, max_tokens=16384)
+                                                  model_mode=self.engine.model_mode, max_tokens=16384, ws=websocket)
             elapsed = time.time() - t0
         except Exception as e:
             await self._send(websocket, type="error", content=f"Gather phase error: {e}")
@@ -434,6 +482,8 @@ class Session:
                 await self._send(websocket, type="tool_result",
                                  id=tc.id, name=tc.function.name,
                                  success=is_ok, content=result_text[:2000])
+                if tc.function.name == "todowrite":
+                    await self._send_todo(websocket)
             self.ctx.commit_draft()
 
         # ── Phase 2: Execute ──
@@ -451,7 +501,7 @@ class Session:
             await self._send(websocket, type="thinking_status", status="Streaming execute...")
             t0 = time.time()
             response = await self._collect_stream(exec_msgs, exec_tools,
-                                                  model_mode=self.engine.model_mode, max_tokens=16384)
+                                                  model_mode=self.engine.model_mode, max_tokens=16384, ws=websocket)
             elapsed = time.time() - t0
         except Exception as e:
             await self._send(websocket, type="error", content=f"Execute phase error: {e}")
@@ -498,6 +548,8 @@ class Session:
                 await self._send(websocket, type="tool_result", id=tc.id,
                                  name=tc.function.name, success=is_ok,
                                  content=result_text[:2000])
+                if tc.function.name == "todowrite":
+                    await self._send_todo(websocket)
             self.ctx.commit_draft()
 
         if content and not self._stop_requested:

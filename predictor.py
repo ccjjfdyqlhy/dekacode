@@ -16,7 +16,8 @@ class DurationPredictor:
         self.b = b     # base overhead (seconds)
         self.n = n
 
-    def predict(self, input_tokens: int, cache_hit_input: int, output_est: int) -> float:
+    def predict(self, input_tokens: int, cache_hit_input: int, output_est: int,
+                pending_tasks: int = 0, total_tasks: int = 0) -> float:
         non_cached = max(input_tokens - cache_hit_input, 0)
         if self.n < 2:
             return 60.0
@@ -24,6 +25,8 @@ class DurationPredictor:
         out_k = output_est / 1000
         c_k = input_tokens / 1000
         result = self.w1 * nc_k + self.w2 * out_k + self.w3 * c_k + self.b
+        if pending_tasks > 0 and total_tasks > 0:
+            result *= 1.0 + (pending_tasks / total_tasks) * 0.5
         return max(1, min(300, result))
 
     def add(self, input_tokens: int, cache_hit_input: int, output_tokens: int, elapsed: float) -> None:

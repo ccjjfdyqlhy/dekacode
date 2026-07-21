@@ -1089,7 +1089,10 @@ async def run_agent_loop(settings: Settings) -> None:
                 est_cache = prev_rec.cache_hit_input if prev_rec else 0
                 est_out = prev_rec.output_tokens if prev_rec else 1024
                 req_size = sum(len(m.content or "") for m in request)
-                est_dur = predictor.predict(req_size, est_cache, est_out)
+                _todo = get_tracker()
+                _pend = sum(1 for i in _todo.items if i.status not in ("completed", "cancelled"))
+                _tot = len(_todo.items)
+                est_dur = predictor.predict(req_size, est_cache, est_out, _pend, _tot)
                 # 每次迭代都用当前上下文规模更新预估：
                 # 工具调用 → 上下文增长 → c_k(total_input/1000) 增大 → est_dur 增大
                 _turn_estimated = max(_turn_estimated, _turn_elapsed + est_dur * 2)
