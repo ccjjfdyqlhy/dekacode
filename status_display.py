@@ -28,6 +28,35 @@ class StatusDisplay:
         bar = "━" * filled + ("╸" + "━" * (19 - filled) if filled < 20 else "━" * 20)
         return f"[green]{bar}[/] [bold]{pct:.0f}%[/]"
 
+    _PAST_TENSE = {
+        "Thinking": "Thought",
+        "Bashing": "Bashed",
+        "Reading": "Read",
+        "Writing": "Wrote",
+        "Globbing": "Globbed",
+        "Grepping": "Grepped",
+        "Fetching": "Fetched",
+        "Searching": "Searched",
+        "Tracing": "Traced",
+        "Checking": "Checked",
+        "Batching": "Batched",
+        "Listing": "Listed",
+        "Diffing": "Diffed",
+        "Analyzing": "Analyzed",
+        "Resolving": "Resolved",
+        "Prefetching": "Prefetched",
+        "Streaming": "Streamed",
+        "GitHubbing": "GitHub done",
+        "Executing gather batch": "Gather batch done",
+        "Gathering info (phase 1/2)": "Info gathered",
+        "Planning execution (phase 2/2)": "Execution planned",
+        "Gathering info": "Info gathered",
+        "Planning execution": "Execution planned",
+    }
+
+    def _past_label(self) -> str:
+        return self._PAST_TENSE.get(self._label, self._label)
+
     def _commit_line(self, finished: bool = False) -> str:
         """已提交的历史行：无进度条，有 description 则显示描述。"""
         elapsed = time.time() - self._turn_start
@@ -38,7 +67,8 @@ class StatusDisplay:
             parts.append(f"[bold cyan]{chars[idx]}[/] ")
         else:
             parts.append("[bold green]✓[/] ")
-        parts.append(f"[bold]{self._label}[/]")
+        label = self._past_label() if finished else self._label
+        parts.append(f"[bold]{label}[/]")
         if self._description:
             parts.append(f"  [dim]{self._description}[/]")
         elif self._detail:
@@ -81,7 +111,7 @@ class StatusDisplay:
         return "".join(parts)
 
     def _draw(self) -> None:
-        self._console.print(self._live_str(), end="\r")
+        self._console.print(self._live_str(), end="\r\033[K")
 
     def token(self, text: str) -> None:
         self._token_str = text
@@ -130,7 +160,7 @@ class StatusDisplay:
                 pass
             self._ticker_task = None
             if self._label:
-                self._console.print(self._commit_line(finished=False))
+                self._console.print(self._commit_line(finished=False) + "\033[K")
 
     async def _ticker(self) -> None:
         try:

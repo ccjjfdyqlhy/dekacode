@@ -53,7 +53,7 @@ class TokenCounter:
     session_cost: float = 0.0
 
     def record(self, response: dict, model: str = "flash", elapsed: float = 0.0) -> UsageRecord:
-        usage = response.get("usage", {})
+        usage = response.get("usage") or {}
         prompt_tokens = usage.get("prompt_tokens", 0)
         completion_tokens = usage.get("completion_tokens", 0)
         cached_tokens = usage.get("prompt_tokens_details", {}).get("cached_tokens", 0) if isinstance(usage.get("prompt_tokens_details"), dict) else 0
@@ -90,6 +90,9 @@ class TokenCounter:
         return rec
 
     def display(self, rec: UsageRecord) -> str:
+        if rec.input_tokens == 0 and rec.output_tokens == 0:
+            time_tag = f"[magenta]{rec.elapsed:.1f}s[/]" if rec.elapsed else ""
+            return time_tag
         peak_tag = " [red]⚡[/]" if rec.peak_hours else ""
         hit_pct = (rec.cache_hit_input / rec.input_tokens * 100) if rec.input_tokens > 0 else 0
         time_tag = f" [magenta]{rec.elapsed:.1f}s[/]" if rec.elapsed else ""
@@ -106,6 +109,8 @@ class TokenCounter:
         total_cache = sum(r.cache_hit_input for r in self.records)
         total_elapsed = sum(r.elapsed for r in self.records)
         time_tag = f"  [magenta]{total_elapsed:.1f}s[/]" if total_elapsed else ""
+        if total_in == 0 and total_out == 0:
+            return f"  [dim]Usage not supported[/]{time_tag}"
         return (
             f"  [yellow]∑[/] {fmt_tokens(total_in)} [dim]in[/] "
             f"[cyan]↓[/] {fmt_tokens(total_out)} [dim]out[/] "

@@ -69,6 +69,7 @@ from token_counter import TokenCounter, fmt_tokens
 from utils import LLMClient
 from cache_warmer import CacheWarmer
 from predictor import DurationPredictor
+from skills.todowrite import get_tracker
 from memory import MemoryStore
 from modes import AgentMode, ModeState
 from context_gatherer import ContextGatherer
@@ -178,54 +179,27 @@ def _filter_tools_by_set(registry: SkillRegistry, active_set: set[str]) -> list:
     return [td for td in registry.get_tool_definitions() if td.function["name"] in active_set]
 
 def _setup_registry(graph=None, settings=None) -> SkillRegistry:
-    from skills.web_fetch import WebFetchSkill
-    from skills.bash import BashSkill
-    from skills.file_ops import (
-        ReadFileSkill,
-        WriteFileSkill,
-        GlobSkill,
-        GrepSkill,
-        EditFileSkill,
-        ReadFilesSkill,
-        GrepContextSkill,
-        ListDirSkill,
-    )
-    from skills.git_ops import DiffFileSkill
-    from skills.py_check import PyCheckSkill, AstSummarySkill
-    from skills.dekacode import DekaCodeSkill
-    from skills.github_ops import GitHubSkill
-
     registry = SkillRegistry()
-    registry.register(WebFetchSkill())
-    registry.register(BashSkill())
-    registry.register(ReadFileSkill())
-    registry.register(WriteFileSkill())
-    registry.register(GlobSkill())
-    registry.register(GrepSkill())
-    registry.register(EditFileSkill())
-    registry.register(ReadFilesSkill())
-    registry.register(GrepContextSkill())
-    registry.register(ListDirSkill())
-    registry.register(DiffFileSkill())
-
+    skills_config = {
+        "modules": [
+            "skills.web_fetch",
+            "skills.bash",
+            "skills.file_ops",
+            "skills.git_ops",
+            "skills.py_check",
+            "skills.dekacode",
+            "skills.github_ops",
+            "skills.todowrite",
+        ],
+        "packages": [
+            "skills.core",
+            "skills.project",
+        ],
+        "exclude": [],
+    }
     if graph:
-        from skills.symbol_search import SymbolSearchSkill, CallersSkill, ReadSymbolSkill
-        registry.register(SymbolSearchSkill(graph))
-        registry.register(CallersSkill(graph))
-        registry.register(ReadSymbolSkill(graph))
-
-    registry.register(PyCheckSkill())
-    registry.register(AstSummarySkill())
-
-    # DekaCode工具集线器: 整合core/project模块的全部代码分析能力
-    # (batch_bash, symbol_search, find_def, find_ref, diagnose, fix_imports,
-    #  diff_lines, summarize, key_files, module_map, snapshot 等)
-    registry.register(DekaCodeSkill())
-
-    token = settings.github_token if settings else ""
-    base_url = settings.github_base_url if settings else "https://api.github.com"
-    registry.register(GitHubSkill(token=token, base_url=base_url))
-
+        skills_config["modules"].append("skills.symbol_search")
+    registry.load_skills_from_config(skills_config, graph=graph, settings=settings)
     return registry
 
 
@@ -470,6 +444,25 @@ async def run_agent_loop(settings: Settings) -> None:
         "github": "GitHubbing",
         "_prefetch": "Prefetching", "_placeholder": "Resolving",
     }
+    _tool_prepare_map = {
+        "bash": "Preparing command",
+        "read_file": "Preparing read",
+        "write_file": "Preparing write",
+        "edit_file": "Preparing edit",
+        "read_files": "Preparing read",
+        "glob": "Preparing search",
+        "grep": "Preparing search",
+        "grep_context": "Preparing search",
+        "list_dir": "Preparing list",
+        "diff_file": "Preparing diff",
+        "ast_summary": "Preparing analysis",
+        "web_fetch": "Preparing fetch",
+        "symbol_search": "Preparing search",
+        "callers": "Preparing trace",
+        "read_symbol": "Preparing read",
+        "py_check": "Preparing check",
+        "github": "Preparing GitHub",
+    }
 
     def _render_hist(hist: list) -> None:
         for m in hist:
@@ -534,7 +527,48 @@ async def run_agent_loop(settings: Settings) -> None:
         t0 = time.time()
         rec_len_before = len(token_counter.records)
         try:
-            response = await client.chat(gather_msgs, gather_tool_defs, model_mode=model_mode, max_tokens=16384)
+            content_buf = ""
+            tool_calls_buf = []
+            finish_reason = None
+            last_usage = None
+            _stream_gather = False
+            _reasoning_active = False
+            async for chunk in client.chat_stream(gather_msgs, gather_tool_defs, model_mode=model_mode, max_tokens=16384):
+                if chunk.delta_reasoning:
+                    if not _reasoning_active:
+                        await display.end()
+                        _reasoning_active = True
+                        _reasoning_t0 = time.time()
+                        sys.stdout.write('  Thought: ')
+                    sys.stdout.write(chunk.delta_reasoning)
+                    sys.stdout.flush()
+                if chunk.delta_content:
+                    if not _stream_gather:
+                        _stream_gather = True
+                    content_buf += chunk.delta_content
+                if chunk.delta_tool_calls:
+                    if _reasoning_active:
+                        _reasoning_active = False
+                    tool_calls_buf = chunk.delta_tool_calls
+                if chunk.finish_reason:
+                    finish_reason = chunk.finish_reason
+                if chunk.usage:
+                    last_usage = chunk.usage
+            if _reasoning_active:
+                _thinking_elapsed = time.time() - _reasoning_t0
+                sys.stdout.write(f'  [{_thinking_elapsed:.1f}s]\n')
+                sys.stdout.flush()
+            elapsed = time.time() - t0
+            response = {
+                "choices": [{
+                    "message": {
+                        "content": content_buf or None,
+                        "tool_calls": tool_calls_buf if tool_calls_buf else None,
+                    },
+                    "finish_reason": finish_reason or "stop",
+                }],
+                "usage": last_usage,
+            }
         except Exception as e:
             await display.end()
             _console.print(f"  [red]✗ API Error (gather phase): {e}[/]")
@@ -609,7 +643,50 @@ async def run_agent_loop(settings: Settings) -> None:
         await display.status("Planning execution (phase 2/2)")
         t0 = time.time()
         try:
-            response = await client.chat(exec_msgs, exec_tool_defs, model_mode=model_mode, max_tokens=16384)
+            content_buf = ""
+            tool_calls_buf = []
+            finish_reason = None
+            last_usage = None
+            _stream_exec = False
+            _reasoning_active = False
+            exec_content = ""
+            async for chunk in client.chat_stream(exec_msgs, exec_tool_defs, model_mode=model_mode, max_tokens=16384):
+                if chunk.delta_reasoning:
+                    if not _reasoning_active:
+                        await display.end()
+                        _reasoning_active = True
+                        _reasoning_t0 = time.time()
+                        sys.stdout.write('  Thought: ')
+                    sys.stdout.write(chunk.delta_reasoning)
+                    sys.stdout.flush()
+                if chunk.delta_content:
+                    if not _stream_exec:
+                        _stream_exec = True
+                    exec_content += chunk.delta_content
+                if chunk.delta_tool_calls:
+                    if _reasoning_active:
+                        _reasoning_active = False
+                    tool_calls_buf = chunk.delta_tool_calls
+                if chunk.finish_reason:
+                    finish_reason = chunk.finish_reason
+                if chunk.usage:
+                    last_usage = chunk.usage
+            if _reasoning_active:
+                _thinking_elapsed = time.time() - _reasoning_t0
+                sys.stdout.write(f'  [{_thinking_elapsed:.1f}s]\n')
+                sys.stdout.flush()
+            content = exec_content
+            elapsed = time.time() - t0
+            response = {
+                "choices": [{
+                    "message": {
+                        "content": exec_content or None,
+                        "tool_calls": tool_calls_buf if tool_calls_buf else None,
+                    },
+                    "finish_reason": finish_reason or "stop",
+                }],
+                "usage": last_usage,
+            }
         except Exception as e:
             await display.end()
             _console.print(f"  [red]✗ API Error (execute phase): {e}[/]")
@@ -625,7 +702,8 @@ async def run_agent_loop(settings: Settings) -> None:
         rec = token_counter.record(response, model=model_mode, elapsed=elapsed)
         _turn_elapsed += elapsed
         usage_text = token_counter.display(rec)
-        display.token(usage_text)
+        if not _reasoning_active:
+            display.token(usage_text)
         logger.log_response(response, elapsed, usage_text)
 
         msg = choices[0].get("message", {})
@@ -669,18 +747,25 @@ async def run_agent_loop(settings: Settings) -> None:
         turn_total_in = sum(r.input_tokens for r in token_counter.records[rec_len_before:])
         turn_total_out = sum(r.output_tokens for r in token_counter.records[rec_len_before:])
         turn_total_cost = sum(r.cost for r in token_counter.records[rec_len_before:])
-        _console.print(Text.assemble(
-            ("  ∑ ", "yellow"),
-            (f"{fmt_tokens(turn_total_in)} ", ""),
-            ("in  ", "dim"),
-            ("↓ ", "cyan"),
-            (f"{fmt_tokens(turn_total_out)} ", ""),
-            ("out  ", "dim"),
-            ("│ ", "dim"),
-            (f"¥{turn_total_cost:.4f}", "bold yellow"),
-            ("  │ ", "dim"),
-            (f"{_turn_elapsed:.1f}s", "magenta"),
-        ))
+        if turn_total_in == 0 and turn_total_out == 0:
+            _console.print(Text.assemble(
+                ("  Usage not supported", "dim"),
+                ("  │ ", "dim"),
+                (f"{_turn_elapsed:.1f}s", "magenta"),
+            ))
+        else:
+            _console.print(Text.assemble(
+                ("  ∑ ", "yellow"),
+                (f"{fmt_tokens(turn_total_in)} ", ""),
+                ("in  ", "dim"),
+                ("↓ ", "cyan"),
+                (f"{fmt_tokens(turn_total_out)} ", ""),
+                ("out  ", "dim"),
+                ("│ ", "dim"),
+                (f"¥{turn_total_cost:.4f}", "bold yellow"),
+                ("  │ ", "dim"),
+                (f"{_turn_elapsed:.1f}s", "magenta"),
+            ))
         turn = 1
 
     warmer.set_context(ctx, model_mode)
@@ -1013,8 +1098,52 @@ async def run_agent_loop(settings: Settings) -> None:
                 try:
                     await display.status("Thinking", turn_estimated=_turn_estimated)
                     t0 = time.time()
-                    response = await client.chat(request, tools, model_mode=model_mode, max_tokens=output_limit)
+                    content_buf = ""
+                    tool_calls_buf = []
+                    finish_reason = None
+                    last_usage = None
+                    _streaming = False
+                    _reasoning_active = False
+                    async for chunk in client.chat_stream(request, tools, model_mode=model_mode, max_tokens=output_limit):
+                        if chunk.delta_reasoning:
+                            if not _reasoning_active:
+                                await display.end()
+                                _reasoning_active = True
+                                _reasoning_t0 = time.time()
+                                sys.stdout.write('  Thought: ')
+                            sys.stdout.write(chunk.delta_reasoning)
+                            sys.stdout.flush()
+                        if chunk.delta_content:
+                            if not _streaming:
+                                _streaming = True
+                            content_buf += chunk.delta_content
+                        if chunk.delta_tool_calls:
+                            if _reasoning_active:
+                                _reasoning_active = False
+                            tool_calls_buf = chunk.delta_tool_calls
+                            if not _streaming and tool_calls_buf:
+                                tc_name = tool_calls_buf[0]["function"]["name"]
+                                prep = _tool_prepare_map.get(tc_name, "Preparing")
+                                await display.status(prep, description=(content_buf or "").replace("\n", " ")[:60])
+                        if chunk.finish_reason:
+                            finish_reason = chunk.finish_reason
+                        if chunk.usage:
+                            last_usage = chunk.usage
+                    if _reasoning_active:
+                        _thinking_elapsed = time.time() - _reasoning_t0
+                        sys.stdout.write(f'  [{_thinking_elapsed:.1f}s]\n')
+                        sys.stdout.flush()
                     elapsed = time.time() - t0
+                    response = {
+                        "choices": [{
+                            "message": {
+                                "content": content_buf or None,
+                                "tool_calls": tool_calls_buf if tool_calls_buf else None,
+                            },
+                            "finish_reason": finish_reason or "stop",
+                        }],
+                        "usage": last_usage,
+                    }
                 except KeyboardInterrupt:
                     await display.end()
                     ctx.rollback_draft()
@@ -1046,8 +1175,52 @@ async def run_agent_loop(settings: Settings) -> None:
                             try:
                                 await display.status("Thinking", turn_estimated=_turn_estimated)
                                 t0 = time.time()
-                                response = await client.chat(request, tools, model_mode=model_mode, max_tokens=output_limit)
+                                content_buf = ""
+                                tool_calls_buf = []
+                                finish_reason = None
+                                last_usage = None
+                                _streaming = False
+                                _reasoning_active = False
+                                async for chunk in client.chat_stream(request, tools, model_mode=model_mode, max_tokens=output_limit):
+                                    if chunk.delta_reasoning:
+                                        if not _reasoning_active:
+                                            await display.end()
+                                            _reasoning_active = True
+                                            _reasoning_t0 = time.time()
+                                            sys.stdout.write('  Thought: ')
+                                        sys.stdout.write(chunk.delta_reasoning)
+                                        sys.stdout.flush()
+                                    if chunk.delta_content:
+                                        if not _streaming:
+                                            _streaming = True
+                                        content_buf += chunk.delta_content
+                                    if chunk.delta_tool_calls:
+                                        if _reasoning_active:
+                                            _reasoning_active = False
+                                        tool_calls_buf = chunk.delta_tool_calls
+                                        if not _streaming and tool_calls_buf:
+                                            tc_name = tool_calls_buf[0]["function"]["name"]
+                                            prep = _tool_prepare_map.get(tc_name, "Preparing")
+                                            await display.status(prep, description=(content_buf or "").replace("\n", " ")[:60])
+                                    if chunk.finish_reason:
+                                        finish_reason = chunk.finish_reason
+                                    if chunk.usage:
+                                        last_usage = chunk.usage
+                                if _reasoning_active:
+                                    _thinking_elapsed = time.time() - _reasoning_t0
+                                    sys.stdout.write(f'  [{_thinking_elapsed:.1f}s]\n')
+                                    sys.stdout.flush()
                                 elapsed = time.time() - t0
+                                response = {
+                                    "choices": [{
+                                        "message": {
+                                            "content": content_buf or None,
+                                            "tool_calls": tool_calls_buf if tool_calls_buf else None,
+                                        },
+                                        "finish_reason": finish_reason or "stop",
+                                    }],
+                                    "usage": last_usage,
+                                }
                                 ok = True
                                 break
                             except KeyboardInterrupt:
@@ -1083,7 +1256,8 @@ async def run_agent_loop(settings: Settings) -> None:
                 if _turn_elapsed > _turn_estimated * 0.85:
                     _turn_estimated = _turn_elapsed * 2
                 usage_text = token_counter.display(rec)
-                display.token(usage_text)
+                if not _reasoning_active:
+                    display.token(usage_text)
                 logger.log_response(response, elapsed, usage_text)
                 predictor.add(rec.input_tokens, rec.cache_hit_input, rec.output_tokens, elapsed)
                 predictor.save()
@@ -1229,33 +1403,43 @@ async def run_agent_loop(settings: Settings) -> None:
                         turn_total_in = sum(r.input_tokens for r in token_counter.records[turn_start_idx:])
                         turn_total_out = sum(r.output_tokens for r in token_counter.records[turn_start_idx:])
                         turn_total_cost = sum(r.cost for r in token_counter.records[turn_start_idx:])
-                        _console.print(Text.assemble(
-                            ("  ∑ ", "yellow"),
-                            (f"{fmt_tokens(turn_total_in)} ", ""),
-                            ("in  ", "dim"),
-                            ("↓ ", "cyan"),
-                            (f"{fmt_tokens(turn_total_out)} ", ""),
-                            ("out  ", "dim"),
-                            ("│ ", "dim"),
-                            (f"¥{turn_total_cost:.4f}", "bold yellow"),
-                            ("  │ ", "dim"),
-                            (f"{_turn_elapsed:.1f}s", "magenta"),
-                        ))
-                        if token_counter.records:
-                            last = token_counter.records[-1]
-                            ctx_pct = last.input_tokens / 1_000_000 * 100
-                            cache_pct = last.cache_hit_input / last.input_tokens * 100 if last.input_tokens > 0 else 0
-                            out_pct = last.output_tokens / 128_000 * 100
+                        if turn_total_in == 0 and turn_total_out == 0:
                             _console.print(Text.assemble(
-                                ("  Context ", "dim"),
-                                (f"{ctx_pct:.1f}%", "cyan"),
-                                ("  Cache ", "dim"),
-                                (f"{cache_pct:.0f}%", "green"),
-                                ("  Output ", "dim"),
-                                (f"{out_pct:.1f}%", "yellow"),
+                                ("  Usage not supported", "dim"),
                                 ("  │ ", "dim"),
                                 (f"{_turn_elapsed:.1f}s", "magenta"),
                             ))
+                        else:
+                            _console.print(Text.assemble(
+                                ("  ∑ ", "yellow"),
+                                (f"{fmt_tokens(turn_total_in)} ", ""),
+                                ("in  ", "dim"),
+                                ("↓ ", "cyan"),
+                                (f"{fmt_tokens(turn_total_out)} ", ""),
+                                ("out  ", "dim"),
+                                ("│ ", "dim"),
+                                (f"¥{turn_total_cost:.4f}", "bold yellow"),
+                                ("  │ ", "dim"),
+                                (f"{_turn_elapsed:.1f}s", "magenta"),
+                            ))
+                        if token_counter.records:
+                            last = token_counter.records[-1]
+                            if last.input_tokens == 0 and last.output_tokens == 0:
+                                pass
+                            else:
+                                ctx_pct = last.input_tokens / 1_000_000 * 100
+                                cache_pct = last.cache_hit_input / last.input_tokens * 100 if last.input_tokens > 0 else 0
+                                out_pct = last.output_tokens / 128_000 * 100
+                                _console.print(Text.assemble(
+                                    ("  Context ", "dim"),
+                                    (f"{ctx_pct:.1f}%", "cyan"),
+                                    ("  Cache ", "dim"),
+                                    (f"{cache_pct:.0f}%", "green"),
+                                    ("  Output ", "dim"),
+                                    (f"{out_pct:.1f}%", "yellow"),
+                                    ("  │ ", "dim"),
+                                    (f"{_turn_elapsed:.1f}s", "magenta"),
+                                ))
                     else:
                         await display.end()
                     break
@@ -1339,6 +1523,11 @@ async def run_agent_loop(settings: Settings) -> None:
                         importance=0.4
                     )
                     _console.print(f"  [dim]Memory: stored[/]")
+
+            _todo_tracker = get_tracker()
+            _todo_render = _todo_tracker.render()
+            if _todo_render:
+                _console.print(_todo_render)
 
             warmer.set_context(ctx, model_mode)
 

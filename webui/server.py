@@ -111,40 +111,27 @@ class DekacodeEngine:
         return g
 
     def _setup_registry(self):
-        from skills.web_fetch import WebFetchSkill
-        from skills.bash import BashSkill
-        from skills.file_ops import (
-            ReadFileSkill, WriteFileSkill, GlobSkill, GrepSkill,
-            EditFileSkill, ReadFilesSkill, GrepContextSkill, ListDirSkill,
-        )
-        from skills.git_ops import DiffFileSkill
-        from skills.py_check import PyCheckSkill, AstSummarySkill
-        from skills.dekacode import DekaCodeSkill
-        from skills.github_ops import GitHubSkill
-
         registry = SkillRegistry()
-        registry.register(WebFetchSkill())
-        registry.register(BashSkill())
-        registry.register(ReadFileSkill())
-        registry.register(WriteFileSkill())
-        registry.register(GlobSkill())
-        registry.register(GrepSkill())
-        registry.register(EditFileSkill())
-        registry.register(ReadFilesSkill())
-        registry.register(GrepContextSkill())
-        registry.register(ListDirSkill())
-        registry.register(DiffFileSkill())
+        skills_config = {
+            "modules": [
+                "skills.web_fetch",
+                "skills.bash",
+                "skills.file_ops",
+                "skills.git_ops",
+                "skills.py_check",
+                "skills.dekacode",
+                "skills.github_ops",
+                "skills.todowrite",
+            ],
+            "packages": [
+                "skills.core",
+                "skills.project",
+            ],
+            "exclude": [],
+        }
         if self.graph:
-            from skills.symbol_search import SymbolSearchSkill, CallersSkill, ReadSymbolSkill
-            registry.register(SymbolSearchSkill(self.graph))
-            registry.register(CallersSkill(self.graph))
-            registry.register(ReadSymbolSkill(self.graph))
-        registry.register(PyCheckSkill())
-        registry.register(AstSummarySkill())
-        registry.register(DekaCodeSkill())
-        token = settings.github_token or ""
-        base_url = settings.github_base_url or "https://api.github.com"
-        registry.register(GitHubSkill(token=token, base_url=base_url))
+            skills_config["modules"].append("skills.symbol_search")
+        registry.load_skills_from_config(skills_config, graph=self.graph, settings=settings)
         return registry
 
     def new_session(self):
@@ -201,16 +188,49 @@ class Session:
         ctx_pct = last.input_tokens / 1_000_000 * 100 if last.input_tokens else 0
         cache_pct = (last.cache_hit_input / last.input_tokens * 100) if last.input_tokens > 0 else 0
         out_pct = last.output_tokens / 128_000 * 100 if last.output_tokens else 0
-        await self._send(ws, type="summary",
-                         input_tokens=total_in,
-                         output_tokens=total_out,
-                         cache_hit=total_cache,
-                         cache_miss=total_in - total_cache,
-                         cost=round(total_cost, 4),
-                         elapsed=round(elapsed, 1),
-                         ctx_pct=round(ctx_pct, 1),
-                         cache_pct=round(cache_pct, 0),
-                         out_pct=round(out_pct, 1))
+        if total_in == 0 and total_out == 0:
+            await self._send(ws, type="summary",
+                             elapsed=round(elapsed, 1),
+                             usage_supported=False)
+        else:
+            await self._send(ws, type="summary",
+                             input_tokens=total_in,
+                             output_tokens=total_out,
+                             cache_hit=total_cache,
+                             cache_miss=total_in - total_cache,
+                             cost=round(total_cost, 4),
+                             elapsed=round(elapsed, 1),
+                             ctx_pct=round(ctx_pct, 1),
+                             cache_pct=round(cache_pct, 0),
+                             out_pct=round(out_pct, 1),
+                             usage_supported=True)
+
+    async def _collect_stream(self, messages, tools, model_mode, max_tokens):
+        content_buf = ""
+        tool_calls_buf = []
+        finish_reason = None
+        last_usage = None
+        async for chunk in self.engine.client.chat_stream(
+            messages, tools, model_mode=model_mode, max_tokens=max_tokens
+        ):
+            if chunk.delta_content:
+                content_buf += chunk.delta_content
+            if chunk.delta_tool_calls:
+                tool_calls_buf = chunk.delta_tool_calls
+            if chunk.finish_reason:
+                finish_reason = chunk.finish_reason
+            if chunk.usage:
+                last_usage = chunk.usage
+        return {
+            "choices": [{
+                "message": {
+                    "content": content_buf or None,
+                    "tool_calls": tool_calls_buf if tool_calls_buf else None,
+                },
+                "finish_reason": finish_reason or "stop",
+            }],
+            "usage": last_usage,
+        }
 
     async def _send(self, ws: WebSocket, **data):
         if self._stop_requested:
@@ -234,9 +254,12 @@ class Session:
             request = self.ctx.build_request()
 
             try:
-                response = await self.engine.client.chat(
+                await self._send(websocket, type="thinking_status", status="Streaming...")
+                t0 = time.time()
+                response = await self._collect_stream(
                     request, tools, model_mode=self.engine.model_mode, max_tokens=16384
                 )
+                elapsed = time.time() - t0
             except Exception as e:
                 await self._send(websocket, type="error", content=str(e))
                 await self._send(websocket, type="thinking_done")
@@ -247,6 +270,8 @@ class Session:
                 await self._send(websocket, type="error", content="Empty response")
                 await self._send(websocket, type="thinking_done")
                 return
+
+            rec = self.engine._token_counter.record(response, model=self.engine.model_mode, elapsed=elapsed)
 
             msg = choices[0].get("message", {})
             content = msg.get("content") or ""
@@ -353,8 +378,11 @@ class Session:
         if self._stop_requested:
             return
         try:
-            response = await self.engine.client.chat(gather_msgs, gather_tools,
-                                                      model_mode=self.engine.model_mode, max_tokens=16384)
+            await self._send(websocket, type="thinking_status", status="Streaming gather...")
+            t0 = time.time()
+            response = await self._collect_stream(gather_msgs, gather_tools,
+                                                  model_mode=self.engine.model_mode, max_tokens=16384)
+            elapsed = time.time() - t0
         except Exception as e:
             await self._send(websocket, type="error", content=f"Gather phase error: {e}")
             await self._send(websocket, type="thinking_done")
@@ -420,8 +448,11 @@ class Session:
 
         await self._send(websocket, type="thinking_status", status="Planning execution (phase 2/2)")
         try:
-            response = await self.engine.client.chat(exec_msgs, exec_tools,
-                                                      model_mode=self.engine.model_mode, max_tokens=16384)
+            await self._send(websocket, type="thinking_status", status="Streaming execute...")
+            t0 = time.time()
+            response = await self._collect_stream(exec_msgs, exec_tools,
+                                                  model_mode=self.engine.model_mode, max_tokens=16384)
+            elapsed = time.time() - t0
         except Exception as e:
             await self._send(websocket, type="error", content=f"Execute phase error: {e}")
             await self._send(websocket, type="thinking_done")
