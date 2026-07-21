@@ -9,6 +9,7 @@
 <body>
 <div id="app">
   <button id="sidebarToggle" onclick="toggleSidebar()" title="Toggle sidebar">&#x2630;</button>
+  <button id="tempChatBtn" onclick="toggleTempChat()" title="Temporary session">⚡</button>
   <div id="sidebar">
     <div class="sidebar-header">
       <div class="logo">dekacode</div>
@@ -25,20 +26,27 @@
       <div class="info-row"><span class="label">Symbols</span><span class="value" id="symbolCount">—</span></div>
     </div>
     <div class="sidebar-actions">
-      <button class="action-btn" onclick="optionsMenu()" title="Options">
+      <button class="action-btn" onclick="toggleOptions()" title="Options">
         <span class="icon">&#x2699;</span> Options
       </button>
-      <div class="options-dropdown" id="optionsMenu">
-      </div>
     </div>
   </div>
   <div id="main">
-    <div id="welcome" style="display:flex">
-      <img src="/logo.png" alt="Dekacode" class="welcome-logo" id="welcomeLogo">
-      <div class="welcome-text">How can I help you?</div>
-      <div class="welcome-project" id="welcomeProject"></div>
+    <div id="settingsPanel" style="display:none">
+      <div class="settings-header">
+        <button class="settings-close-btn" onclick="toggleOptions()">✕</button>
+        Settings
+      </div>
+      <div class="settings-content" id="settingsContent"></div>
     </div>
-    <div id="messages"></div>
+    <div class="chat-area" id="chatArea">
+      <div id="welcome" class="welcome-centered">
+        <img src="/logo.png" alt="Dekacode" class="welcome-logo" id="welcomeLogo">
+        <div class="welcome-text" id="welcomeText">How can I help you?</div>
+        <div class="welcome-project" id="welcomeProject"></div>
+      </div>
+      <div id="messages"></div>
+    </div>
     <div id="inputArea">
       <div id="executionPanel" class="execution-panel" style="display:none">
         <div class="ep-header" onclick="toggleExecutionPanel(this)">
@@ -46,9 +54,11 @@
           <span class="arrow">&#x25B6;</span>
           <span class="ep-status" id="execStatus">Thinking</span>
           <span class="ep-elapsed" id="execElapsed"></span>
-      </div>
+        </div>
+        <div class="ep-progress-bar"><div class="ep-progress-fill"></div></div>
         <div class="ep-body" id="execBody"></div>
       </div>
+      <div id="scrollHint" class="scroll-hint" style="display:none">Ctrl+E or End to go back</div>
       <div id="inputBar">
         <div id="cmdPanel" class="cmd-panel" style="display:none"></div>
         <textarea id="input" rows="1" placeholder="Type a message... (Enter to send, Ctrl+Enter newline, / for commands)"></textarea>

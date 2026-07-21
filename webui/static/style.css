@@ -84,6 +84,107 @@ html, body {
   color: var(--text);
 }
 
+#tempChatBtn {
+  position: fixed;
+  top: 10px;
+  right: 16px;
+  z-index: 100;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 15px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s, border-color 0.2s;
+}
+#tempChatBtn:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+#tempChatBtn.active {
+  border-color: var(--text);
+  color: var(--text);
+  background: var(--surface2);
+}
+
+#main.temp-mode {
+  border: 3px solid rgba(255,255,255,0.45);
+  border-radius: 12px;
+  max-width: none;
+  margin: 6px;
+  transition: border 0.3s, max-width 0.3s;
+}
+
+/* ─── Settings Panel ─── */
+
+#settingsPanel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px 36px;
+  background: var(--bg);
+  display: none;
+}
+.settings-header {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.settings-close-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.settings-close-btn:hover {
+  background: var(--surface2);
+  color: var(--text);
+}
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.setting-row label {
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.setting-row input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+}
+
+/* ─── Welcome centered ─── */
+
 .sidebar-header {
   display: flex;
   align-items: center;
@@ -245,6 +346,17 @@ html, body {
 }
 .options-item:last-child { border-bottom: none; }
 .options-item:hover { background: var(--surface2); color: var(--text); }
+.option-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+.option-row label { cursor: pointer; }
+.option-row input[type="checkbox"] { cursor: pointer; accent-color: var(--accent); }
 
 /* ─── Main ─── */
 
@@ -254,6 +366,23 @@ html, body {
   margin: 0 auto;
   display: flex;
   flex-direction: column;
+  position: relative;
+  height: 100vh;
+}
+
+.chat-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  position: relative;
+}
+
+#messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 4px;
   position: relative;
 }
 
@@ -400,47 +529,72 @@ html, body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 4px 0;
   cursor: pointer;
   user-select: none;
   font-size: 12px;
   color: var(--accent);
   transition: background 0.15s;
 }
-.thinking-details-header:hover { background: var(--surface); }
+.thinking-details-header:hover { opacity: 0.8; }
 
 .thinking-details-header .arrow {
   transition: transform 0.2s;
   font-size: 10px;
+  flex-shrink: 0;
+  width: 12px;
 }
-.thinking-details-header .arrow.open { transform: rotate(90deg); }
-.thinking-details-header .status-text { color: var(--text-dim); }
 
-.thinking-details-body { display: none; }
-.thinking-details-body.open { display: block; border-top: 1px solid var(--border); }
-
-.tool-result-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px 4px 16px;
-  font-size: 12px;
+.thinking-banner-text {
   color: var(--text-dim);
-  border-top: 1px solid var(--border);
-  animation: fadeIn 0.12s ease;
-}
-.tool-result-item:first-child { border-top: none; }
-.tool-result-item .status-icon { font-size: 13px; flex-shrink: 0; }
-.tool-result-item .tool-name { color: var(--cyan); font-weight: 600; flex-shrink: 0; }
-.tool-result-item .tool-detail {
-  color: var(--text-muted);
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  transition: opacity 0.3s, transform 0.3s;
+}
+
+.thinking-details-body {
+  display: none;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.thinking-tool-item {
+  padding: 2px 0 2px 18px;
+  font-size: 12px;
+  animation: fadeIn 0.12s ease;
+}
+.thinking-tool-item:last-child { margin-bottom: 4px; }
+
+.thinking-reason {
+  padding: 2px 0 4px 18px;
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: 11px;
+  white-space: pre-wrap;
+  line-height: 1.4;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 /* ─── Execution Panel (live above input) ─── */
+
+.ep-progress-bar {
+  height: 2px;
+  background: var(--surface2);
+  margin: 0 8px 4px;
+  border-radius: 1px;
+  overflow: hidden;
+}
+.ep-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+  transition: width 0.5s ease;
+  border-radius: 1px;
+}
 
 .execution-panel {
   position: absolute;
@@ -515,19 +669,25 @@ html, body {
   align-items: center;
   justify-content: center;
   gap: 16px;
-  padding: 40px 20px 160px;
+  padding: 40px 20px 40px;
   user-select: none;
   pointer-events: none;
-  position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  z-index: 5;
+  flex: 1;
+  min-height: 0;
 }
 
+.welcome-centered {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
 
 .welcome-logo {
-  max-width: 60%;
-  max-height: 40vh;
-  opacity: 0.5;
+  max-width: 50%;
+  max-height: 30vh;
+  opacity: 0.4;
 }
 
 .welcome-text {
@@ -543,6 +703,41 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+#inputArea.welcome-input {
+  position: absolute;
+  top: 65%;
+  bottom: auto;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%;
+  max-width: 600px;
+  z-index: 10;
+}
+
+/* ─── Scroll Hint ─── */
+
+.scroll-hint {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 8px 0;
+  cursor: pointer;
+  user-select: none;
+  animation: fadeIn 0.3s ease;
+}
+.scroll-hint:hover { color: var(--accent); }
+
+#inputArea.scrolled-up #inputBar {
+  opacity: 0;
+  pointer-events: none;
+  max-height: 0;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+#inputArea.scrolled-up #footerNotice {
+  display: none;
 }
 
 /* ─── Summary ─── */
@@ -569,6 +764,7 @@ html, body {
   z-index: 10;
   padding: 14px 20px 8px;
   pointer-events: none;
+  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 #inputBar {

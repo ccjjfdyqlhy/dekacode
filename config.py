@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     mnemosyne_embedding_model: str = "BAAI/bge-small-en-v1.5"
     mnemosyne_data_dir: str = ""
 
+    thinking_collapsed_default: bool = True
+
     model_config = {
         "env_file": _DEKACODE_DIR / ".env",
         "env_file_encoding": "utf-8",

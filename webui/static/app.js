@@ -6,6 +6,11 @@ let mode = 'agent';
 let commands = [];
 let cmdSelectedIdx = -1;
 let hasSentMessage = false;
+let thinkingCollapsed = true;
+let _thinkingTimer = null;
+let isTempChat = false;
+let _prevSessionState = null;
+let _optionsOpen = false;
 
 // ─── WebSocket ────────────────────────────────────────────────────
 
@@ -17,6 +22,7 @@ function connect() {
     showToast('Connected');
     fetchStatus();
     fetchCommands();
+    fetchOptions();
   };
 
   ws.onmessage = (event) => {
@@ -44,35 +50,24 @@ function handleMessage(data) {
   switch (data.type) {
 
     case 'thinking_start':
-      showThinkingBar(data.status || 'Thinking...');
+      showThinkingBar();
       if (!currentAssistantEl) {
         currentAssistantEl = createAssistantMessage();
-        const details = document.createElement('div');
-        details.className = 'thinking-details';
-        details.innerHTML = `
-          <div class="thinking-details-header" onclick="toggleThinkingDetails(this)">
-            <span class="arrow">&#x25B6;</span>
-            <span class="status-text">${escapeHtml(data.status || 'Thinking')}</span>
-          </div>
-          <div class="thinking-details-body"></div>
-        `;
-        currentAssistantEl.appendChild(details);
-      } else {
-        const st = currentAssistantEl.querySelector('.status-text');
-        if (st) st.textContent = data.status || 'Thinking';
+      }
+      ensureThinkingEl(thinkingCollapsed);
+      break;
+
+    case 'thinking_text':
+      if (currentAssistantEl) {
+        updateThinkingBanner(data.content);
       }
       break;
 
     case 'thinking_status':
       updateThinkingBar(data.status || '');
       if (currentAssistantEl) {
-        const st = currentAssistantEl.querySelector('.status-text');
-        if (st) st.textContent = data.status || '';
-        const lastItem = currentAssistantEl.querySelector('.tool-result-item:last-child .tool-detail');
-        if (lastItem && data.status) {
-          const parts = data.status.split(' ');
-          if (parts.length > 1) lastItem.textContent = parts.slice(1).join(' ');
-        }
+        const st = currentAssistantEl.querySelector('.thinking-banner-text');
+        if (st && data.status) st.textContent = data.status;
       }
       break;
 
@@ -80,26 +75,29 @@ function handleMessage(data) {
       hideThinkingBar();
       isProcessing = false;
       if (currentAssistantEl) {
-        const st = currentAssistantEl.querySelector('.status-text');
+        const st = currentAssistantEl.querySelector('.thinking-banner-text');
         if (st) {
-          const count = currentAssistantEl.querySelectorAll('.tool-result-item').length;
-          st.textContent = count > 0 ? `${count} tasks done` : 'Done';
+          const count = currentAssistantEl.querySelectorAll('.thinking-tool-item').length;
+          st.textContent = count > 0 ? `${count} tools completed` : '';
         }
       }
       break;
 
     case 'tool_calls':
       addToolCallsToExec(data.calls);
-      addToolCallsToThinking(data.calls);
+      if (currentAssistantEl) {
+        for (const call of data.calls) {
+          addThinkingToolItem(call);
+        }
+      }
       break;
 
     case 'tool_result':
       updateToolResult(data.id, data.name, data.success, data.content);
       if (currentAssistantEl) {
-        const item = currentAssistantEl.querySelector(`.tool-result-item[data-call-id="${data.id}"]`);
+        const item = currentAssistantEl.querySelector(`.thinking-tool-item[data-call-id="${data.id}"]`);
         if (item) {
-          const icon = item.querySelector('.status-icon');
-          if (icon) icon.textContent = data.success ? '\u2705' : '\u274C';
+          item.style.color = data.success ? 'var(--green)' : 'var(--red)';
         }
       }
       break;
@@ -187,6 +185,26 @@ function welcomeEl() { return document.getElementById('welcome'); }
 function scrollToBottom() {
   const el = messagesEl();
   el.scrollTop = el.scrollHeight;
+  checkScrollPosition();
+}
+
+function checkScrollPosition() {
+  const el = messagesEl();
+  const inputArea = document.getElementById('inputArea');
+  const hint = document.getElementById('scrollHint');
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  if (atBottom) {
+    inputArea.classList.remove('scrolled-up');
+    if (hint) hint.style.display = 'none';
+  } else {
+    inputArea.classList.add('scrolled-up');
+    if (hint) hint.style.display = 'block';
+  }
+}
+
+function scrollToTop() {
+  messagesEl().scrollTop = 0;
+  checkScrollPosition();
 }
 
 function createAssistantMessage() {
@@ -206,11 +224,13 @@ function hideWelcome() {
 
 // ─── Execution Panel (replaces thinking bar) ─────────────────────
 
-function showThinkingBar(text) {
+function showThinkingBar() {
   const panel = document.getElementById('executionPanel');
   panel.style.display = 'block';
-  document.getElementById('execStatus').textContent = text;
-  document.getElementById('execElapsed').textContent = '0.0s';
+  const bar = panel.querySelector('.ep-progress-fill');
+  if (bar) bar.style.width = '0%';
+  document.getElementById('execStatus').textContent = 'Thinking...';
+  document.getElementById('execElapsed').textContent = '';
   document.getElementById('execBody').innerHTML = '';
   setSendButtonStop(true);
   _execStart = Date.now();
@@ -245,79 +265,128 @@ function setSendButtonStop(isStop) {
   }
 }
 
-// ─── Thinking Details (in-message record) ────────────────────────
+// ─── Thinking Banner (in-message) ──────────────────────────────────
+
+function ensureThinkingEl(collapsed) {
+  if (!currentAssistantEl) return;
+  let details = currentAssistantEl.querySelector('.thinking-details');
+  if (!details) {
+    details = document.createElement('div');
+    details.className = 'thinking-details';
+    const header = document.createElement('div');
+    header.className = 'thinking-details-header';
+    header.onclick = function() { toggleThinkingDetails(header); };
+    header.innerHTML = `
+      <span class="arrow">&#x25B6;</span>
+      <span class="thinking-banner-text"></span>
+    `;
+    const body = document.createElement('div');
+    body.className = 'thinking-details-body';
+    details.appendChild(header);
+    details.appendChild(body);
+    currentAssistantEl.appendChild(details);
+    if (collapsed) {
+      body.style.display = 'none';
+      header.classList.add('collapsed');
+    } else {
+      header.querySelector('.arrow').textContent = '\u25BC';
+      body.style.display = 'block';
+      header.classList.remove('collapsed');
+    }
+  }
+}
+
+function updateThinkingBanner(text) {
+  if (!currentAssistantEl) return;
+  ensureThinkingEl(thinkingCollapsed);
+  const header = currentAssistantEl.querySelector('.thinking-details-header');
+  const banner = currentAssistantEl.querySelector('.thinking-banner-text');
+  if (!header || !banner) return;
+  if (!header._texts) header._texts = [];
+  header._texts.push(text);
+  if (header._texts.length > 6) header._texts.shift();
+  const clean = text.slice(0, 120).replace(/\n/g, ' ');
+  if (!clean) return;
+  banner.style.opacity = '1';
+  banner.style.transform = 'translateY(0)';
+  banner.textContent = clean;
+  if (_thinkingTimer) clearTimeout(_thinkingTimer);
+  _thinkingTimer = setTimeout(() => {
+    banner.style.opacity = '0.6';
+  }, 800);
+}
+
+function addThinkingToolItem(call) {
+  if (!currentAssistantEl) return;
+  ensureThinkingEl(thinkingCollapsed);
+  const body = currentAssistantEl.querySelector('.thinking-details-body');
+  if (!body) return;
+  let detail = '';
+  try {
+    const args = JSON.parse(call.args);
+    if (call.name === 'read_file') {
+      const p = args.filePath || '';
+      const o = args.offset; const l = args.limit;
+      detail = o && l ? `${p}:${o}-${l}` : p;
+    } else if (call.name === 'write_file' || call.name === 'edit_file') {
+      detail = args.filePath || '';
+    } else if (call.name === 'bash') {
+      detail = (args.command || '').split('\n')[0].slice(0, 60);
+    } else if (call.name === 'glob') {
+      detail = args.pattern || '';
+    } else if (call.name === 'grep' || call.name === 'grep_context') {
+      detail = '/' + (args.pattern || '') + '/';
+    } else if (call.name === 'web_fetch') {
+      detail = args.url || '';
+    } else if (call.name === 'symbol_search') {
+      detail = args.query || '';
+    } else if (call.name === 'callers' || call.name === 'read_symbol') {
+      detail = args.symbol || '';
+    } else if (call.name === 'list_dir') {
+      detail = args.path || '';
+    } else if (call.name === 'py_check') {
+      detail = args.file_path || '';
+    }
+  } catch (e) {}
+  const item = document.createElement('div');
+  item.className = 'thinking-tool-item';
+  item.setAttribute('data-call-id', call.id);
+  item.textContent = call.name + (detail ? ': ' + detail : '');
+  item.style.color = 'var(--text-dim)';
+  body.appendChild(item);
+  const banner = currentAssistantEl.querySelector('.thinking-banner-text');
+  if (banner) banner.textContent = toolStatusLabel(call.name) + (detail ? ': ' + detail : '');
+}
+
+function toolStatusLabel(name) {
+  const m = {
+    bash:'Running', read_file:'Reading', write_file:'Writing', edit_file:'Editing',
+    glob:'Globbing', grep:'Grepping', grep_context:'Grepping', list_dir:'Listing',
+    diff_file:'Diffing', ast_summary:'Analyzing', web_fetch:'Fetching',
+    symbol_search:'Searching', callers:'Tracing', read_symbol:'Reading',
+    py_check:'Checking', github:'GitHubbing', todowrite:'Updating todo'
+  };
+  return m[name] || 'Working';
+}
 
 function toggleThinkingDetails(header) {
   const body = header.nextElementSibling;
   const arrow = header.querySelector('.arrow');
-  body.classList.toggle('open');
-  arrow.classList.toggle('open');
-}
-
-function addToolCallsToThinking(calls) {
-  let body;
-  if (currentAssistantEl) {
-    body = currentAssistantEl.querySelector('.thinking-details-body');
-  }
-  if (!body) {
-    if (!currentAssistantEl) currentAssistantEl = createAssistantMessage();
-    const details = document.createElement('div');
-    details.className = 'thinking-details';
-    details.innerHTML = `
-      <div class="thinking-details-header" onclick="toggleThinkingDetails(this)">
-        <span class="arrow">&#x25B6;</span>
-        <span class="status-text">Thinking</span>
-      </div>
-      <div class="thinking-details-body"></div>
-    `;
-    currentAssistantEl.appendChild(details);
-    body = currentAssistantEl.querySelector('.thinking-details-body');
-    if (!body) return;
-  }
-  for (const call of calls) {
-    let detail = '';
-    try {
-      const args = JSON.parse(call.args);
-      if (call.name === 'read_file') {
-        const p = args.filePath || '';
-        const o = args.offset;
-        const l = args.limit;
-        detail = o && l ? `${p}:${o}-${l}` : p;
-      } else if (call.name === 'write_file') {
-        detail = args.filePath || '';
-      } else if (call.name === 'edit_file') {
-        detail = args.filePath || '';
-      } else if (call.name === 'glob') {
-        detail = args.pattern || '';
-      } else if (call.name === 'grep' || call.name === 'grep_context') {
-        detail = `/${args.pattern || ''}/`;
-      } else if (call.name === 'bash') {
-        const cmd = (args.command || '').split('\n')[0];
-        detail = cmd ? `$ ${cmd.slice(0, 60)}` : '';
-      } else if (call.name === 'web_fetch') {
-        detail = args.url || '';
-      } else if (call.name === 'symbol_search') {
-        detail = args.query || '';
-      } else if (call.name === 'callers' || call.name === 'read_symbol') {
-        detail = args.symbol || '';
-      } else if (call.name === 'list_dir') {
-        detail = args.path || '';
-      } else if (call.name === 'py_check') {
-        detail = args.file_path || '';
-      } else if (call.name === 'read_files') {
-        const ps = args.paths || [];
-        detail = `${ps.length} files`;
-      }
-    } catch (e) {}
-    const item = document.createElement('div');
-    item.className = 'tool-result-item';
-    item.dataset.callId = call.id;
-    item.innerHTML = `
-      <span class="status-icon">&#x23F3;</span>
-      <span class="tool-name">${escapeHtml(call.name)}</span>
-      ${detail ? `<span class="tool-detail">${escapeHtml(detail)}</span>` : ''}
-    `;
-    body.appendChild(item);
+  if (body.style.display === 'none' || !body.style.display) {
+    body.style.display = 'block';
+    arrow.textContent = '\u25BC';
+    header.classList.remove('collapsed');
+    let reasonEl = body.querySelector('.thinking-reason');
+    if (!reasonEl) {
+      reasonEl = document.createElement('div');
+      reasonEl.className = 'thinking-reason';
+      body.insertBefore(reasonEl, body.firstChild);
+    }
+    if (header._texts) reasonEl.textContent = header._texts.join('\n');
+  } else {
+    body.style.display = 'none';
+    arrow.textContent = '\u25B6';
+    header.classList.add('collapsed');
   }
 }
 
@@ -462,9 +531,119 @@ function appendReasoningDelta(text) {
 }
 
 function updateProgressBar(elapsed) {
-  const bar = document.getElementById('thinking-progress-bar');
-  if (bar) {
-    bar.textContent = elapsed + 's elapsed';
+  const fill = document.querySelector('.ep-progress-fill');
+  const label = document.getElementById('execElapsed');
+  if (label) label.textContent = elapsed + 's';
+  if (fill) {
+    const pct = Math.min(Math.floor(elapsed / 60 * 100), 95);
+    fill.style.width = pct + '%';
+  }
+}
+
+// ─── Options ───────────────────────────────────────────────────────
+
+let _optionsCache = { thinking_collapsed_default: true };
+
+async function fetchOptions() {
+  try {
+    const r = await fetch('/api/options');
+    _optionsCache = await r.json();
+    thinkingCollapsed = _optionsCache.thinking_collapsed_default;
+  } catch (e) {}
+}
+
+async function saveOption(key, value) {
+  _optionsCache[key] = value;
+  if (key === 'thinking_collapsed_default') thinkingCollapsed = value;
+  try {
+    await fetch('/api/options', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: value })
+    });
+  } catch (e) {}
+}
+
+function toggleOptions() {
+  const panel = document.getElementById('settingsPanel');
+  const chat = document.getElementById('chatArea');
+  const inputArea = document.getElementById('inputArea');
+  _optionsOpen = !_optionsOpen;
+  if (_optionsOpen) {
+    chat.style.display = 'none';
+    inputArea.style.display = 'none';
+    panel.style.display = 'block';
+    renderSettings();
+  } else {
+    chat.style.display = '';
+    inputArea.style.display = '';
+    panel.style.display = 'none';
+  }
+}
+
+function renderSettings() {
+  const content = document.getElementById('settingsContent');
+  content.innerHTML = `
+    <div class="setting-row">
+      <label for="optCollapse">Thinking details collapsed by default</label>
+      <input type="checkbox" id="optCollapse"
+        ${_optionsCache.thinking_collapsed_default ? 'checked' : ''}
+        onchange="saveOption('thinking_collapsed_default', this.checked)">
+    </div>
+  `;
+}
+
+// ─── Temp Chat ─────────────────────────────────────────────────────
+
+function toggleTempChat() {
+  const main = document.getElementById('main');
+  const sidebar = document.getElementById('sidebar');
+  const btn = document.getElementById('tempChatBtn');
+  const welcome = document.getElementById('welcome');
+  const welcomeText = document.getElementById('welcomeText');
+  const inputArea = document.getElementById('inputArea');
+
+  isTempChat = !isTempChat;
+
+  if (isTempChat) {
+    _prevSessionState = {
+      messagesHtml: document.getElementById('messages').innerHTML,
+      welcomeDisplay: welcome.style.display,
+      welcomeTextContent: welcomeText.textContent,
+    };
+    btn.classList.add('active');
+    main.classList.add('temp-mode');
+    if (!sidebar.classList.contains('collapsed')) {
+      toggleSidebar();
+    }
+    welcome.style.display = 'flex';
+    welcomeText.textContent = 'Chat without memory and history.';
+    document.getElementById('messages').innerHTML = '';
+    hasSentMessage = false;
+    currentAssistantEl = null;
+    inputArea.classList.add('welcome-input');
+    document.getElementById('executionPanel').style.display = 'none';
+    sendJson({ type: 'temp_session' });
+  } else {
+    btn.classList.remove('active');
+    main.classList.remove('temp-mode');
+    if (sidebar.classList.contains('collapsed')) {
+      toggleSidebar();
+    }
+    if (_prevSessionState) {
+      document.getElementById('messages').innerHTML = _prevSessionState.messagesHtml;
+      welcome.style.display = _prevSessionState.welcomeDisplay;
+      welcomeText.textContent = _prevSessionState.welcomeTextContent;
+    }
+    hasSentMessage = false;
+    currentAssistantEl = null;
+    inputArea.classList.remove('welcome-input');
+    if (!_prevSessionState || _prevSessionState.messagesHtml) {
+      hideWelcome();
+    } else {
+      inputArea.classList.add('welcome-input');
+    }
+    sendJson({ type: 'restore_session' });
   }
 }
 
@@ -573,6 +752,14 @@ input.addEventListener('keydown', (e) => {
     e.preventDefault();
     sendMessage();
   }
+  if ((e.key === 'End' || (e.ctrlKey && e.key === 'e')) && !input.value.trim()) {
+    e.preventDefault();
+    scrollToBottom();
+  }
+  if ((e.key === 'Home' || (e.ctrlKey && e.key === 'h')) && !input.value.trim()) {
+    e.preventDefault();
+    scrollToTop();
+  }
   if (e.key === 'Escape') {
     hideCmdPanel();
   }
@@ -605,6 +792,19 @@ function sendMessage() {
   input.value = '';
   input.style.height = 'auto';
   hideCmdPanel();
+
+  const inputArea = document.getElementById('inputArea');
+  if (inputArea.classList.contains('welcome-input')) {
+    inputArea.classList.remove('welcome-input');
+    document.getElementById('welcome').style.display = 'none';
+  }
+
+  if (_optionsOpen) {
+    document.getElementById('settingsPanel').style.display = 'none';
+    document.getElementById('chatArea').style.display = '';
+    document.getElementById('inputArea').style.display = '';
+    _optionsOpen = false;
+  }
 
   appendUserMessage(text);
   currentAssistantEl = null;
@@ -744,6 +944,7 @@ function newSession() {
   isProcessing = false;
   const w = document.getElementById('welcome');
   if (w) w.style.display = 'flex';
+  document.getElementById('inputArea').classList.add('welcome-input');
   input.focus();
   updateSessionList();
 }
@@ -825,10 +1026,10 @@ function restoreChatFromStorage() {
       sessionId = last.id;
       messagesEl().innerHTML = last.html;
       document.querySelectorAll('.thinking-details').forEach(d => {
-        const st = d.querySelector('.status-text');
+        const st = d.querySelector('.thinking-banner-text');
         if (st) {
-          const count = d.querySelectorAll('.tool-result-item').length;
-          st.textContent = count > 0 ? `${count} tasks done` : 'Done';
+          const count = d.querySelectorAll('.thinking-tool-item').length;
+          st.textContent = count > 0 ? `${count} tools completed` : '';
         }
       });
       hasSentMessage = true;
@@ -877,10 +1078,10 @@ function restoreSession(idx) {
   messagesEl().innerHTML = s.html;
   // Mark all thinking-details status as Done
   document.querySelectorAll('.thinking-details').forEach(d => {
-    const st = d.querySelector('.status-text');
+    const st = d.querySelector('.thinking-banner-text');
     if (st) {
-      const count = d.querySelectorAll('.tool-result-item').length;
-      st.textContent = count > 0 ? `${count} tasks done` : 'Done';
+      const count = d.querySelectorAll('.thinking-tool-item').length;
+      st.textContent = count > 0 ? `${count} tools completed` : '';
     }
   });
   hasSentMessage = true;
@@ -1113,4 +1314,31 @@ document.addEventListener('DOMContentLoaded', () => {
   if (input) input.focus();
   document.getElementById('sendBtn').onclick = sendMessage;
 
+  // Welcome page: center the input if welcome is visible
+  const inputArea = document.getElementById('inputArea');
+  if (inputArea && !hasSentMessage) {
+    inputArea.classList.add('welcome-input');
+  }
+
+  // Scroll-aware input collapse
+  const msgs = messagesEl();
+  msgs.addEventListener('scroll', checkScrollPosition);
+  document.getElementById('scrollHint').addEventListener('click', scrollToBottom);
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && _optionsOpen) {
+      toggleOptions();
+      return;
+    }
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === 'End' || (e.ctrlKey && e.key === 'e')) {
+      e.preventDefault();
+      scrollToBottom();
+    }
+    if (e.key === 'Home' || (e.ctrlKey && e.key === 'h')) {
+      e.preventDefault();
+      scrollToTop();
+    }
+  });
 });

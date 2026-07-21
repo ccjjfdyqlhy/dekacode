@@ -3,10 +3,11 @@ import os
 import sys
 import time
 import traceback
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -218,6 +219,7 @@ class Session:
         finish_reason = None
         last_usage = None
         _reasoning_active = False
+        _reasoning_buf = ""
         t_start = time.time()
         last_progress = t_start
         async for chunk in self.engine.client.chat_stream(
@@ -227,9 +229,13 @@ class Session:
                 if not _reasoning_active:
                     _reasoning_active = True
                     if ws:
-                        await self._send(ws, type="thinking_status", status="Thinking...")
+                        await self._send(ws, type="thinking_start", status="Thinking...")
+                _reasoning_buf += chunk.delta_reasoning
                 if ws:
                     await self._send(ws, type="reasoning_delta", content=chunk.delta_reasoning)
+                    latest = _reasoning_buf.strip().rsplit('\n', 1)[-1]
+                    if latest:
+                        await self._send(ws, type="thinking_text", content=latest)
             if chunk.delta_content:
                 content_buf += chunk.delta_content
                 if ws:
@@ -604,6 +610,12 @@ async def websocket_endpoint(websocket: WebSocket):
             elif msg_type == "stop":
                 session.stop()
 
+            elif msg_type == "temp_session":
+                session = engine.new_session()
+
+            elif msg_type == "restore_session":
+                session = engine.new_session()
+
             elif msg_type == "mode":
                 mode = msg.get("mode", "agent")
                 try:
@@ -726,6 +738,39 @@ async def list_models():
     for m in models:
         m["active"] = m["id"] == engine.model_mode
     return models
+
+
+@app.get("/api/options")
+async def get_options():
+    return {
+        "thinking_collapsed_default": settings.thinking_collapsed_default,
+    }
+
+
+@app.post("/api/options")
+async def set_options(request: Request):
+    data = await request.json()
+    if "thinking_collapsed_default" in data:
+        settings.thinking_collapsed_default = data["thinking_collapsed_default"]
+        env_path = Path(__file__).parent.parent / ".env"
+        _update_env_file(env_path, "THINKING_COLLAPSED_DEFAULT",
+                         str(settings.thinking_collapsed_default).lower())
+    return {"thinking_collapsed_default": settings.thinking_collapsed_default}
+
+
+def _update_env_file(path: Path, key: str, value: str):
+    if not path.exists():
+        return
+    lines = path.read_text(encoding="utf-8").splitlines(True)
+    found = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith(f"{key}=") or line.strip().startswith(f"# {key}="):
+            lines[i] = f"{key}={value}\n"
+            found = True
+            break
+    if not found:
+        lines.append(f"\n{key}={value}\n")
+    path.write_text("".join(lines), encoding="utf-8")
 
 
 # ── Serve static files ──
