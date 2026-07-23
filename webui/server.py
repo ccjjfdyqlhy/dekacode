@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -24,6 +25,7 @@ from code_graph.cache import GraphCache
 from sub_agent import run_sub_agents, build_merge_prompt
 from context_gatherer import ContextGatherer
 from token_counter import TokenCounter, fmt_tokens
+from predictor import DurationPredictor
 
 settings = Settings()
 project_root = os.getcwd()
@@ -101,6 +103,7 @@ class DekacodeEngine:
         self.model_mode = "flash"
         self.client.switch_model(self.model_mode)
         self._token_counter = TokenCounter()
+        self.predictor = DurationPredictor.load()
 
     def _build_graph(self):
         cache = GraphCache(project_root)
@@ -174,6 +177,7 @@ class Session:
         self._stop_requested = False
         self._rec_start = len(self.engine._token_counter.records)
         self._turn_start_time = time.time()
+        self._last_input = user_input
         if self.agent_mode.is_oneshot():
             await self._process_oneshot(user_input, websocket)
         else:
@@ -224,6 +228,14 @@ class Session:
         _reasoning_buf = ""
         t_start = time.time()
         last_progress = t_start
+        _est_dur = 60.0
+        prev_rec = self.engine._token_counter.records[-1] if self.engine._token_counter.records else None
+        if prev_rec:
+            req_size = sum(len(m.content or "") for m in messages)
+            _est_dur = self.engine.predictor.predict(
+                req_size, prev_rec.cache_hit_input if prev_rec else 0,
+                prev_rec.output_tokens if prev_rec else 1024,
+            )
         async for chunk in self.engine.client.chat_stream(
             messages, tools, model_mode=model_mode, max_tokens=max_tokens
         ):
@@ -273,7 +285,8 @@ class Session:
                 last_usage = chunk.usage
             if ws and time.time() - last_progress > 0.5:
                 elapsed = time.time() - t_start
-                await self._send(ws, type="progress", elapsed=round(elapsed, 1))
+                await self._send(ws, type="progress", elapsed=round(elapsed, 1),
+                                 estimated=round(_est_dur, 0))
                 last_progress = time.time()
         return {
             "choices": [{
@@ -299,6 +312,7 @@ class Session:
         self.ctx.add_user_message(user_input)
         await self._send(websocket, type="thinking_start", status="Thinking...")
 
+        _retry_count = 0
         for turn in range(10):
             if self._stop_requested:
                 await self._send(websocket, type="thinking_done", status="Stopped")
@@ -306,16 +320,32 @@ class Session:
 
             tools = self.engine.registry.get_tool_definitions()
             request = self.ctx.build_request()
+            _success = False
 
-            try:
-                await self._send(websocket, type="thinking_status", status="Streaming...")
-                t0 = time.time()
-                response = await self._collect_stream(
-                    request, tools, model_mode=self.engine.model_mode, max_tokens=16384, ws=websocket
-                )
-                elapsed = time.time() - t0
-            except Exception as e:
-                await self._send(websocket, type="error", content=str(e))
+            for _ in range(10):
+                try:
+                    await self._send(websocket, type="thinking_status", status="Streaming...")
+                    t0 = time.time()
+                    response = await self._collect_stream(
+                        request, tools, model_mode=self.engine.model_mode, max_tokens=16384, ws=websocket
+                    )
+                    elapsed = time.time() - t0
+                    _success = True
+                    break
+                except Exception as e:
+                    error_text = str(e)
+                    if "tool" in error_text and "tool_calls" in error_text:
+                        if _retry_count < 9:
+                            _retry_count += 1
+                            await self._send(websocket, type="thinking_status",
+                                             status=f"Retrying ({_retry_count}/10)...")
+                            await asyncio.sleep(1)
+                            continue
+                    await self._send(websocket, type="error", content=str(e))
+                    await self._send(websocket, type="thinking_done")
+                    return
+
+            if not _success:
                 await self._send(websocket, type="thinking_done")
                 return
 
@@ -751,7 +781,11 @@ async def _handle_command(cmd: str, session: Session, ws: WebSocket):
             await ws.send_json({"type": "command_output", "content": "No API calls yet."})
 
     elif command == "/retry":
-        await ws.send_json({"type": "command_output", "content": "Retry not supported in WebUI (resend your message)."})
+        if hasattr(session, '_last_input') and session._last_input:
+            user_input = session._last_input
+            await session.process_message(session._last_input, ws)
+        else:
+            await ws.send_json({"type": "command_output", "content": "No previous input to retry."})
 
     elif command == "/undo":
         await ws.send_json({"type": "command_output", "content": "Undo not supported in WebUI (use /clear to reset)."})

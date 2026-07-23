@@ -76,9 +76,23 @@ function handleMessage(data) {
       isProcessing = false;
       if (currentAssistantEl) {
         const st = currentAssistantEl.querySelector('.thinking-banner-text');
-        if (st) {
-          const count = currentAssistantEl.querySelectorAll('.thinking-tool-item').length;
-          st.textContent = count > 0 ? `${count} tools completed` : '';
+        if (st && st.textContent) {
+          const label = st.textContent.trim();
+          const past = {
+            'Thinking': 'Thought', 'Bashing': 'Bashed', 'Reading': 'Read',
+            'Writing': 'Wrote', 'Editing': 'Edited', 'Globbing': 'Globbed',
+            'Grepping': 'Grepped', 'Fetching': 'Fetched', 'Searching': 'Searched',
+            'Tracing': 'Traced', 'Checking': 'Checked', 'Batching': 'Batched',
+            'Listing': 'Listed', 'Diffing': 'Diffed', 'Analyzing': 'Analyzed',
+            'Resolving': 'Resolved', 'Streaming': 'Streamed',
+            'Preparing command': 'Command prepared', 'Preparing read': 'Read prepared',
+            'Preparing write': 'Write prepared', 'Preparing edit': 'Edit prepared',
+            'Preparing search': 'Search prepared', 'Preparing list': 'List prepared',
+            'Preparing diff': 'Diff prepared', 'Preparing analysis': 'Analysis prepared',
+            'Preparing fetch': 'Fetch prepared', 'Preparing trace': 'Trace prepared',
+            'Preparing check': 'Check prepared',
+          };
+          st.textContent = past[label] || past[label.split(':')[0].trim()] || label;
         }
       }
       break;
@@ -134,7 +148,7 @@ function handleMessage(data) {
       break;
 
     case 'progress':
-      updateProgressBar(data.elapsed);
+      updateProgressBar(data.elapsed, data.estimated);
       break;
 
     case 'todo':
@@ -541,9 +555,14 @@ function appendReasoningDelta(text) {
 function updateProgressBar(elapsed) {
   const fill = document.querySelector('.ep-progress-fill');
   const label = document.getElementById('execElapsed');
-  if (label) label.textContent = elapsed + 's';
+  if (label) {
+    const est = arguments.length > 1 && arguments[1] ? arguments[1] : 60;
+    const remaining = Math.max(0, est - elapsed);
+    label.textContent = elapsed + 's / ' + est + 's';
+  }
   if (fill) {
-    const pct = Math.min(Math.floor(elapsed / 60 * 100), 95);
+    const est = arguments.length > 1 && arguments[1] ? arguments[1] : 60;
+    const pct = Math.min(Math.floor(elapsed / est * 100), 95);
     fill.style.width = pct + '%';
   }
 }
