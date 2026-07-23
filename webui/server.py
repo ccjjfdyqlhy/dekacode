@@ -21,6 +21,7 @@ from models import Function, Message, ToolCall
 from modes import AgentMode, ModeState
 from code_graph.builder import GraphBuilder
 from code_graph.cache import GraphCache
+from sub_agent import run_sub_agents, build_merge_prompt
 from context_gatherer import ContextGatherer
 from token_counter import TokenCounter, fmt_tokens
 
@@ -124,6 +125,7 @@ class DekacodeEngine:
                 "skills.dekacode",
                 "skills.github_ops",
                 "skills.todowrite",
+                "skills.split_task",
             ],
             "packages": [
                 "skills.core",
@@ -345,6 +347,53 @@ class Session:
                     parsed.append(ToolCall(id=tc["id"], type=tc.get("type", "function"), function=func))
                 assistant.tool_calls = parsed
                 self.ctx.draft.append(assistant)
+
+                # ── split_task interception ──
+                _split = [tc for tc in parsed if tc.function.name == "split_task"]
+                if _split:
+                    _other_tools = [tc for tc in parsed if tc.function.name != "split_task"]
+                    if _other_tools:
+                        assistant.tool_calls = _other_tools
+                        for tc in _other_tools:
+                            try:
+                                args = json.loads(tc.function.arguments)
+                                result = await self.engine.registry.execute(tc.function.name, args)
+                                text = result.output if result.success else f"[Error] {result.output}"
+                                self.ctx.add_tool_result(tc.id, tc.function.name, text)
+                                await self._send(websocket, type="tool_result",
+                                                 id=tc.id, name=tc.function.name,
+                                                 success=result.success, content=text[:2000])
+                            except Exception as e:
+                                self.ctx.add_tool_result(tc.id, tc.function.name, str(e))
+                    else:
+                        assistant.tool_calls = None
+                    self.ctx.commit_draft()
+                    for st in _split:
+                        try:
+                            st_args = json.loads(st.function.arguments)
+                            tasks = st_args.get("tasks", [])
+                        except json.JSONDecodeError:
+                            continue
+                        if not tasks:
+                            continue
+                        await self._send(websocket, type="thinking_status", status="Spawning sub-agents...")
+                        await self._send(websocket, type="sub_task_start", tasks=[
+                            {"title": t["title"]} for t in tasks
+                        ])
+                        sub_results = await run_sub_agents(
+                            tasks, self.engine.client, self.engine.registry,
+                            graph=self.graph,
+                            system_prompt=self.engine.system_prompt,
+                            on_status=lambda title, status: None,
+                        )
+                        for r in sub_results:
+                            await self._send(websocket, type="sub_task_result",
+                                             title=r.title, success=r.success,
+                                             elapsed=round(r.elapsed, 1),
+                                             tools=r.tool_count)
+                        merge = build_merge_prompt(sub_results)
+                        self.ctx.history.append(Message(role="system", content=merge))
+                    continue
 
                 if not await self._send(websocket, type="tool_calls",
                                         calls=[{"name": tc.function.name, "args": tc.function.arguments,

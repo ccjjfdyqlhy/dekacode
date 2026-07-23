@@ -25,7 +25,7 @@ class TodowriteSkill(Skill):
             "properties": {
                 "todos": {
                     "type": "array",
-                    "description": "The updated todo list",
+                    "description": "The updated todo list. If parent_index is provided, items are added as sub-tasks of that parent.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -47,12 +47,19 @@ class TodowriteSkill(Skill):
                         "required": ["content", "status", "priority"],
                     },
                 },
+                "parent_index": {
+                    "type": "integer",
+                    "description": "If set, these todos are sub-tasks of the parent at this index (0-based). Use when adding sub-tasks under a split_task item.",
+                },
             },
             "required": ["todos"],
         }
 
-    async def execute(self, todos: list[dict], **kwargs) -> SkillResult:
-        _tracker.set_todos(todos)
+    async def execute(self, todos: list[dict], parent_index: int | None = None, **kwargs) -> SkillResult:
+        if parent_index is not None:
+            _tracker.merge_children(parent_index, todos)
+        else:
+            _tracker.set_todos(todos)
         done = sum(1 for t in todos if t.get("status") in ("completed", "cancelled"))
         total = len(todos)
         pending = [t for t in todos if t.get("status") not in ("completed", "cancelled")]

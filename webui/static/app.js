@@ -141,6 +141,14 @@ function handleMessage(data) {
       showTodoList(data.items, data.done);
       break;
 
+    case 'sub_task_start':
+      showSubTasks(data.tasks);
+      break;
+
+    case 'sub_task_result':
+      updateSubTask(data.title, data.success, data.elapsed, data.tools);
+      break;
+
     case 'command_output':
       // Command responses: not from AI, reset processing immediately
       appendCommandOutput(data.content);
@@ -669,6 +677,42 @@ function showTodoList(items, done) {
       if (panel) panel.style.opacity = '0.5';
     }, 1000);
   }
+}
+
+function showSubTasks(tasks) {
+  if (!currentAssistantEl) {
+    currentAssistantEl = createAssistantMessage();
+  }
+  let body = currentAssistantEl.querySelector('.thinking-details-body');
+  if (!body) {
+    ensureThinkingEl(true);
+    toggleThinkingDetails(currentAssistantEl.querySelector('.thinking-details-header'));
+    body = currentAssistantEl.querySelector('.thinking-details-body');
+  }
+  if (!body) return;
+  let container = body.querySelector('.sub-tasks');
+  if (!container) {
+    container = document.createElement('div');
+    container.className = 'sub-tasks';
+    body.appendChild(container);
+  }
+  tasks.forEach(t => {
+    const item = document.createElement('div');
+    item.className = 'sub-task-item';
+    item.setAttribute('data-sub-title', t.title);
+    item.innerHTML = `<span class="sub-task-icon">⏳</span> ${escapeHtml(t.title)}`;
+    container.appendChild(item);
+  });
+}
+
+function updateSubTask(title, success, elapsed, tools) {
+  if (!currentAssistantEl) return;
+  const item = currentAssistantEl.querySelector(`.sub-task-item[data-sub-title="${title}"]`);
+  if (!item) return;
+  const icon = item.querySelector('.sub-task-icon');
+  if (icon) icon.textContent = success ? '✓' : '✗';
+  item.style.color = success ? 'var(--green)' : 'var(--red)';
+  item.innerHTML = `<span class="sub-task-icon">${success ? '✓' : '✗'}</span> ${escapeHtml(title)} <span style="font-size:10px;color:var(--text-muted)">${elapsed}s · ${tools} tools</span>`;
 }
 
 function appendCommandOutput(text) {

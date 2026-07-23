@@ -108,7 +108,7 @@ class LLMClient:
         if temperature is not None:
             body["temperature"] = temperature
 
-        max_retries = 3
+        max_retries = 10
         last_error: Exception | None = None
         for attempt in range(max_retries):
             try:
@@ -124,7 +124,15 @@ class LLMClient:
                         resp.raise_for_status()
                     except httpx.HTTPStatusError as e:
                         error_body = resp.text
-                        if resp.status_code == 429 or resp.status_code >= 500:
+                        if resp.status_code == 429:
+                            if attempt < 9:
+                                await asyncio.sleep(5)
+                                last_error = RuntimeError(
+                                    f"HTTP 429 (retry {attempt+1}/10 in 5s): {error_body[:200]}"
+                                )
+                                continue
+                            raise RuntimeError(f"HTTP 429 after 10 retries: {error_body[:2000]}") from e
+                        if resp.status_code >= 500:
                             if attempt < max_retries - 1:
                                 wait = 2 ** attempt
                                 last_error = RuntimeError(
@@ -180,7 +188,7 @@ class LLMClient:
         if temperature is not None:
             body["temperature"] = temperature
 
-        max_retries = 3
+        max_retries = 10
         last_error: Exception | None = None
         for attempt in range(max_retries):
             try:
@@ -196,7 +204,15 @@ class LLMClient:
                         if resp.status_code != 200:
                             error_body = await resp.aread()
                             error_text = error_body.decode("utf-8", errors="replace")
-                            if resp.status_code == 429 or resp.status_code >= 500:
+                            if resp.status_code == 429:
+                                if attempt < 9:
+                                    await asyncio.sleep(5)
+                                    last_error = RuntimeError(
+                                        f"HTTP 429 (retry {attempt+1}/10 in 5s): {error_text[:200]}"
+                                    )
+                                    continue
+                                raise RuntimeError(f"HTTP 429 after 10 retries: {error_text[:2000]}")
+                            if resp.status_code >= 500:
                                 if attempt < max_retries - 1:
                                     wait = 2 ** attempt
                                     last_error = RuntimeError(

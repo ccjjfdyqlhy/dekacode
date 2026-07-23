@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "V0.2.5"
+VERSION = "V0.2.6"
 
 _DEKACODE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -70,6 +70,7 @@ from utils import LLMClient
 from cache_warmer import CacheWarmer
 from predictor import DurationPredictor
 from skills.todowrite import get_tracker
+from sub_agent import run_sub_agents, build_merge_prompt
 from memory import MemoryStore
 from modes import AgentMode, ModeState
 from context_gatherer import ContextGatherer
@@ -190,6 +191,7 @@ def _setup_registry(graph=None, settings=None) -> SkillRegistry:
             "skills.dekacode",
             "skills.github_ops",
             "skills.todowrite",
+            "skills.split_task",
         ],
         "packages": [
             "skills.core",
@@ -1312,6 +1314,60 @@ async def run_agent_loop(settings: Settings) -> None:
                             return (tc, f"[Parse Error] Invalid JSON arguments: {e}")
                         except Exception as e:
                             return (tc, f"[Error] Tool crashed: {type(e).__name__}: {e}")
+
+                    # ── split_task interception ──
+                    _split_tasks = [tc for tc in parsed if tc.function.name == "split_task"]
+                    if _split_tasks:
+                        await display.end()
+                        _todo = get_tracker()
+                        # Remove split_task from assistant — it's handled specially below
+                        _other_tools = [tc for tc in parsed if tc.function.name != "split_task"]
+                        if _other_tools:
+                            other_results = await asyncio.gather(*[_exec_one(tc) for tc in _other_tools])
+                            for tc, result_text in other_results:
+                                ctx.add_tool_result(tc.id, tc.function.name, result_text)
+                        # Replace assistant.tool_calls with only the non-split tasks
+                        if _other_tools:
+                            assistant.tool_calls = _other_tools
+                        else:
+                            # No other tools — clear tool_calls so API doesn't expect tool results
+                            assistant.tool_calls = None
+                        _all_merges = []
+                        for st in _split_tasks:
+                            try:
+                                st_args = json.loads(st.function.arguments)
+                                tasks = st_args.get("tasks", [])
+                            except json.JSONDecodeError:
+                                continue
+                            if not tasks:
+                                continue
+                            for t in tasks:
+                                _todo.add_items([{"content": t.get("title", ""), "status": "in_progress", "priority": "high"}])
+                            _todo.render(_console)
+                            _console.print(f"  [bold cyan]⚡ Spawning {len(tasks)} sub-agents...[/]")
+                            _sub_status = {}
+                            def _on_sub_status(title, status):
+                                _sub_status[title] = status
+                                icon = {"running": "[dim]⏳[/]", "done": "[green]✓[/]", "error": "[red]✗[/]"}.get(status, "")
+                                remaining = sum(1 for v in _sub_status.values() if v not in ("done", "error"))
+                                _console.print(f"    {icon} [dim]{title}[/]  ({remaining} to go)")
+                                if status in ("done", "error"):
+                                    idx = _todo.find_by_content(title)
+                                    if idx is not None:
+                                        _todo.items[idx].status = "completed" if status == "done" else "cancelled"
+                            sub_results = await run_sub_agents(
+                                tasks, client, registry, graph=graph,
+                                system_prompt=system_prompt,
+                                on_status=_on_sub_status,
+                            )
+                            _all_merges.append(build_merge_prompt(sub_results))
+                            _console.print(f"  [bold cyan]↻ Merging {len(sub_results)} sub-results...[/]")
+                        ctx.commit_draft()
+                        for m in _all_merges:
+                            ctx.history.append(Message(role="system", content=m))
+                        turn += 1
+                        continue
+                    # ── end split_task ──
 
                     if len(parsed) > 1:
                         await display.status("Batching", f"{len(parsed)} tool calls", description=content)
